@@ -31,7 +31,10 @@ public struct PinyinCandidate: Equatable, Sendable {
 /// English vocabulary.
 public protocol EnglishLexicon: Sendable {
     func isWord(_ w: String) -> Bool   // case-insensitive
+    /// Frequency rank (1 = most common), nil if unknown.
+    func rank(_ w: String) -> Int?
 }
+public extension EnglishLexicon { func rank(_ w: String) -> Int? { nil } }
 
 // MARK: - Composer contract (implemented in Composer.swift, used by the IMK app)
 

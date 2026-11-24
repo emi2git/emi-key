@@ -1,10 +1,13 @@
-# Real engine cases — expected to FAIL against the stub build.
+# Real engine cases
 ma31	马
 tooi ddi 	tôi đi 
 cho con bus 	cho con bú 
 I take the bus 	I take the bus 
 ni3hao 	你好
+xiao4yang2shangshan 	小羊上山
+wo3 shi4 	我是
 mp3 	mp3 
-vieetj 	việt 
-vieetj⎋	vieetj
-class 	class 
+Vieetj Nam 	Việt Nam 
+vieetj⎋ 	vieetj 
+the bus ⎋	the bú 
+class test git 	class test git 

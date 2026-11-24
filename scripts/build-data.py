@@ -66,13 +66,15 @@ def build_pinyin(f):
             syls = [norm_syllable(s) for s in py.split()]
             if len(syls) != len(simp) or not all(SYL.match(s) for s in syls):
                 continue
-            py = " ".join(syls)
             n = freq.get(simp, 0)
             if len(simp) == 1:
                 n = max(n, char_from_words.get(simp, 0) // 4)
             # surname-only and variant entries rank last
+            if py[:1].isupper() and len(simp) > 1:   # proper nouns (names) rank below ordinary words
+                n = n if n >= 200 else 0
             if gloss.startswith("surname ") or "variant of" in gloss or "old variant" in gloss:
                 n = min(n, 1)
+            py = " ".join(syls)
             key = (simp, py)
             if key not in rows or rows[key][1] < n:
                 rows[key] = (trad, n)

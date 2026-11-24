@@ -2,20 +2,21 @@ import Foundation
 
 /// English vocabulary loaded from `english.txt` (one lowercase word per line).
 public final class EnglishWords: EnglishLexicon, @unchecked Sendable {
-    private let words: Set<String>
+    private let words: [String: Int]
 
     public init(resources: URL) {
         let url = resources.appendingPathComponent("english.txt")
         let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        var set = Set<String>(minimumCapacity: 40_000)
+        var set = [String: Int](minimumCapacity: 40_000)
         for line in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
             let w = line.trimmingCharacters(in: .whitespaces)
-            if !w.isEmpty { set.insert(w.lowercased()) }
+            if !w.isEmpty, set[w.lowercased()] == nil { set[w.lowercased()] = set.count + 1 }
         }
         words = set
     }
 
     public var count: Int { words.count }
 
-    public func isWord(_ w: String) -> Bool { words.contains(w.lowercased()) }
+    public func isWord(_ w: String) -> Bool { words[w.lowercased()] != nil }
+    public func rank(_ w: String) -> Int? { words[w.lowercased()] }
 }

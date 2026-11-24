@@ -49,7 +49,10 @@ public struct ContextDetector: Sendable {
         let en = english?.isWord(w) ?? false
         let vi = VietSyllable.isValid(w)
         switch (en, vi) {
-        case (true, true): return [.en: 0.5, .vi: 0.5]
+        case (true, true):
+            // a rare English word that is a normal Vietnamese syllable (cho, con, ban) leans Vietnamese
+            if let r = english?.rank(w), r > 3000 { return [.vi: 0.8, .en: 0.2] }
+            return [.en: 0.5, .vi: 0.5]
         case (true, false): return [.en: 1]
         case (false, true): return [.vi: english == nil ? 0.5 : 0.8]
         case (false, false): return [.en: 0.4]
