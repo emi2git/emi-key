@@ -73,93 +73,121 @@ public final class PinyinEngine: PinyinLookup, @unchecked Sendable {
 
     private func parse() {
         var total = 0.0
-        entries.reserveCapacity(125_000); keys.reserveCapacity(125_000); next.reserveCapacity(125_000)
-        syls.reserveCapacity(330_000); tones.reserveCapacity(330_000); weight.reserveCapacity(125_000)
         buf.withUnsafeBufferPointer { p in
             let n = p.count
-            var i = 0
-            while i < n {
-                let s0 = i; while i < n && p[i] != 9 { i += 1 }; let s1 = i; i += 1
-                let t0 = i; while i < n && p[i] != 9 { i += 1 }; let t1 = i; i += 1
-                let sylStart = syls.count
-                var code: UInt64 = 0, len = 0, tone: UInt8 = 5, key = PinyinEngine.fnvSeed
-                while i < n {
-                    var c = p[i]
-                    if c >= 65 && c <= 90 { c += 32 }
-                    if c >= 97 && c <= 122 { if len < 12 { code |= UInt64(c - 96) << (5 * UInt64(len)) }; len += 1 }
-                    else if c >= 48 && c <= 53 { tone = c == 48 ? 5 : c - 48 }
-                    else if c == 32 || c == 9 || c == 10 {
-                        if len > 0 {
-                            let id = syllableID(code: code, len: min(len, 12))
-                            syls.append(id); tones.append(tone); key = PinyinEngine.fnv(key, id)
-                        }
-                        code = 0; len = 0; tone = 5
-                        if c != 32 { break }
-                    }
-                    i += 1
-                }
-                let atTab = i < n && p[i] == 9
-                i += 1
-                var f = 0
-                if atTab { while i < n && p[i] != 10 { if p[i] >= 48 && p[i] <= 57 { f = f * 10 + Int(p[i] - 48) }; i += 1 }; i += 1 }
-                let cnt = syls.count - sylStart
-                guard cnt > 0, s1 > s0 else { continue }
-                let e = Int32(entries.count)
-                entries.append(Entry(simp: Int32(s0), simpLen: UInt8(min(s1 - s0, 255)),
-                                     trad: Int32(t0), tradLen: UInt8(min(t1 - t0, 255)),
-                                     syl: Int32(sylStart), n: UInt8(min(cnt, 255))))
-                weight.append(Float(f))
-                total += Double(f) + 0.5
-                if cnt > maxLen { maxLen = cnt }
-                let h = Int(key >> 46)
-                keys.append(key); next.append(head[h]); head[h] = e
+            guard let base = p.baseAddress, n > 0 else { return }
+            // Upper bounds: a line has at least 8 bytes, a syllable at least 2 (uninitialised, so cheap).
+            let lines = n / 8 + 1, seps = n / 2 + 1
+            func find(_ c: Int32, _ from: Int) -> Int {
+                guard from < n, let r = memchr(base + from, c, n - from) else { return n }
+                return base.distance(to: r.assumingMemoryBound(to: UInt8.self))
             }
+            // Raw buffers (no bounds checks / CoW in debug builds); copied into arrays at the end.
+            let E = UnsafeMutablePointer<Entry>.allocate(capacity: lines)
+            let W = UnsafeMutablePointer<Float>.allocate(capacity: lines)
+            let K = UnsafeMutablePointer<UInt64>.allocate(capacity: lines)
+            let X = UnsafeMutablePointer<Int32>.allocate(capacity: lines)
+            let S = UnsafeMutablePointer<UInt16>.allocate(capacity: seps)
+            let T = UnsafeMutablePointer<UInt8>.allocate(capacity: seps)
+            defer { E.deallocate(); W.deallocate(); K.deallocate(); X.deallocate(); S.deallocate(); T.deallocate() }
+            var ne = 0, ns = 0
+            head.withUnsafeMutableBufferPointer { H in
+                var i = 0
+                while i < n {
+                    let s0 = i, s1 = find(9, i); i = s1 + 1
+                    let t0 = i, t1 = find(9, i); i = t1 + 1
+                    let sylStart = ns
+                    var code: UInt64 = 0, len = 0, tone: UInt8 = 5, key = PinyinEngine.fnvSeed
+                    while i < n {
+                        var c = p[i]
+                        if c >= 65 && c <= 90 { c += 32 }
+                        if c >= 97 && c <= 122 { if len < 12 { code |= UInt64(c - 96) << (5 * UInt64(len)) }; len += 1 }
+                        else if c >= 48 && c <= 53 { tone = c == 48 ? 5 : c - 48 }
+                        else if c == 32 || c == 9 || c == 10 {
+                            if len > 0 && ns < seps {
+                                let id = syllableID(code: code, len: min(len, 12))
+                                S[ns] = id; T[ns] = tone; ns += 1; key = PinyinEngine.fnv(key, id)
+                            }
+                            code = 0; len = 0; tone = 5
+                            if c != 32 { break }
+                        }
+                        i += 1
+                    }
+                    let atTab = i < n && p[i] == 9
+                    i += 1
+                    var f = 0
+                    if atTab { while i < n && p[i] != 10 { if p[i] >= 48 && p[i] <= 57 { f = f * 10 + Int(p[i] - 48) }; i += 1 }; i += 1 }
+                    let cnt = ns - sylStart
+                    guard cnt > 0, s1 > s0, ne < lines else { ns = sylStart; continue }
+                    E[ne] = Entry(simp: Int32(s0), simpLen: UInt8(min(s1 - s0, 255)),
+                                  trad: Int32(t0), tradLen: UInt8(min(t1 - t0, 255)),
+                                  syl: Int32(sylStart), n: UInt8(min(cnt, 255)))
+                    W[ne] = Float(f)
+                    total += Double(f) + 0.5
+                    if cnt > maxLen { maxLen = cnt }
+                    let h = Int(key >> 46)
+                    K[ne] = key; X[ne] = H[h]; H[h] = Int32(ne)
+                    ne += 1
+                }
+            }
+            entries = Array(UnsafeBufferPointer(start: E, count: ne))
+            weight = Array(UnsafeBufferPointer(start: W, count: ne))
+            keys = Array(UnsafeBufferPointer(start: K, count: ne))
+            next = Array(UnsafeBufferPointer(start: X, count: ne))
+            syls = Array(UnsafeBufferPointer(start: S, count: ns))
+            tones = Array(UnsafeBufferPointer(start: T, count: ns))
         }
         lnTotal = log(max(total, 1))
     }
 
     /// Decodes one UTF-8 scalar at `i`; returns (scalar, byte length).
-    @inline(__always) private func scalar(at i: Int) -> (UInt32, Int) {
-        let b = UInt32(buf[i])
+    @inline(__always) private static func scalar(_ p: UnsafeBufferPointer<UInt8>, _ i: Int) -> (Int, Int) {
+        let b = Int(p[i])
         if b < 0x80 { return (b, 1) }
-        if b < 0xE0 { return ((b & 0x1F) << 6 | UInt32(buf[i+1] & 0x3F), 2) }
-        if b < 0xF0 { return ((b & 0x0F) << 12 | UInt32(buf[i+1] & 0x3F) << 6 | UInt32(buf[i+2] & 0x3F), 3) }
-        return ((b & 0x07) << 18 | UInt32(buf[i+1] & 0x3F) << 12 | UInt32(buf[i+2] & 0x3F) << 6 | UInt32(buf[i+3] & 0x3F), 4)
+        if b < 0xE0 { return ((b & 0x1F) << 6 | Int(p[i+1] & 0x3F), 2) }
+        if b < 0xF0 { return ((b & 0x0F) << 12 | Int(p[i+1] & 0x3F) << 6 | Int(p[i+2] & 0x3F), 3) }
+        return ((b & 0x07) << 18 | Int(p[i+1] & 0x3F) << 12 | Int(p[i+2] & 0x3F) << 6 | Int(p[i+3] & 0x3F), 4)
     }
 
     /// A character with several readings carries the same frequency on each (吗 ma2/ma3/ma5).
     /// Split it by how often each reading occurs inside longer words, plus a share for neutral-tone
     /// readings (standalone particles such as 吗 ma5 / 了 le5 rarely occur inside compounds).
     private func splitReadings() {
-        let maxScalar = 0x40000
-        var group = [Int32](repeating: -1, count: maxScalar)   // scalar → first single-char entry
-        var single = [Int32](repeating: -1, count: entries.count)   // chain of readings per scalar
+        let maxScalar = 0x40000, count = entries.count
+        var group = [Int32](repeating: -1, count: maxScalar)   // scalar → latest single-char entry
+        var single = [Int32](repeating: -1, count: count)      // chain of readings of one scalar
         var multi = [Bool](repeating: false, count: maxScalar)
-        for (i, e) in entries.enumerated() where e.n == 1 {
-            let (s, l) = scalar(at: Int(e.simp))
-            guard l == Int(e.simpLen), Int(s) < maxScalar else { continue }
-            if group[Int(s)] >= 0 { multi[Int(s)] = true }
-            single[i] = group[Int(s)]; group[Int(s)] = Int32(i)
-        }
-        var support = [Double](repeating: 0, count: entries.count)   // per single-char entry
-        for (i, e) in entries.enumerated() where e.n > 1 {
-            var at = Int(e.simp); let end = at + Int(e.simpLen)
-            var k = 0
-            while at < end && k < Int(e.n) {
-                let (s, l) = scalar(at: at)
-                if Int(s) < maxScalar && multi[Int(s)] {
-                    let sy = syls[Int(e.syl) + k], tn = tones[Int(e.syl) + k]
-                    var r = group[Int(s)]
-                    while r >= 0 {
-                        let ri = Int(entries[Int(r)].syl)
-                        if syls[ri] == sy && tones[ri] == tn { support[Int(r)] += Double(weight[i]); break }
-                        r = single[Int(r)]
-                    }
-                }
-                at += l; k += 1
+        var support = [Double](repeating: 0, count: count)     // per single-char entry
+        var multiList: [Int] = []
+        buf.withUnsafeBufferPointer { p in entries.withUnsafeBufferPointer { E in
+        syls.withUnsafeBufferPointer { S in tones.withUnsafeBufferPointer { T in weight.withUnsafeBufferPointer { W in
+        group.withUnsafeMutableBufferPointer { G in single.withUnsafeMutableBufferPointer { N in
+        multi.withUnsafeMutableBufferPointer { M in support.withUnsafeMutableBufferPointer { U in
+            for i in 0..<count where E[i].n == 1 {
+                let (s, l) = PinyinEngine.scalar(p, Int(E[i].simp))
+                guard l == Int(E[i].simpLen), s < maxScalar else { continue }
+                if G[s] >= 0 && !M[s] { M[s] = true; multiList.append(s) }
+                N[i] = G[s]; G[s] = Int32(i)
             }
-        }
-        for s in 0..<maxScalar where multi[s] {
+            for i in 0..<count where E[i].n > 1 {
+                var at = Int(E[i].simp), k = 0
+                let end = at + Int(E[i].simpLen), n = Int(E[i].n), base = Int(E[i].syl)
+                while at < end && k < n {
+                    let (s, l) = PinyinEngine.scalar(p, at)
+                    if s < maxScalar && M[s] {
+                        let sy = S[base + k], tn = T[base + k]
+                        var r = Int(G[s])
+                        while r >= 0 {
+                            let ri = Int(E[r].syl)
+                            if S[ri] == sy && T[ri] == tn { U[r] += Double(W[i]); break }
+                            r = Int(N[r])
+                        }
+                    }
+                    at += l; k += 1
+                }
+            }
+        } } } } } } } } }
+        for s in multiList {
             var list: [Int] = []
             var r = group[s]; while r >= 0 { list.append(Int(r)); r = single[Int(r)] }
             let f = Double(list.map { weight[$0] }.max() ?? 0)
@@ -312,11 +340,14 @@ public final class PinyinEngine: PinyinLookup, @unchecked Sendable {
         var whole: [(cls: Int, score: Double, entries: [Int32], seg: Int)] = []
         var caches = [[Int: [Match]]](repeating: [:], count: segs.count)
         for (si, q) in segs.enumerated() {
+            // Compare segmentations on plain frequency (the length bonus only ranks words against
+            // compositions of the same syllables), and prefer fewer, longer syllables (xian > xi an).
+            let segCost = (PinyinEngine.lengthBonus + 0.5) * Double(q.count - 1)
             let direct = matches(q[...])
             caches[si][q.count] = direct
-            for m in direct { whole.append((m.wrong == 0 ? 0 : 1, m.score, [m.entry], si)) }
+            for m in direct { whole.append((m.wrong == 0 ? 0 : 1, m.score - segCost, [m.entry], si)) }
             if q.count > 1 {
-                for (s, es) in compose(q, cache: &caches[si]) where es.count > 1 { whole.append((1, s, es, si)) }
+                for (s, es) in compose(q, cache: &caches[si]) where es.count > 1 { whole.append((1, s - segCost, es, si)) }
             }
         }
         whole.sort { $0.cls != $1.cls ? $0.cls < $1.cls : $0.score > $1.score }
