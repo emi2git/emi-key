@@ -105,7 +105,7 @@ final class InputController: IMKInputController {
                 // App hides its text: clear our marked text, let it delete via real backspaces, then finish.
                 setMarked("", client: client)
                 pending = ComposerOutput(commit: out.commit, marked: out.marked, candidates: out.candidates, handled: out.handled)
-                Synth.post(backspaces: n)
+                Synth.post(backspaces: composer.lastDeleteCount)
             }
             return
         }
