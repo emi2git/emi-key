@@ -55,3 +55,30 @@ final class RealEngineTests: XCTestCase {
         XCTAssert(fails.isEmpty, "\n" + fails.joined(separator: "\n"))
     }
 }
+
+/// Per-key cost of `Composer.handle` with the real dictionaries (prints aggregate numbers only).
+final class LatencyTests: XCTestCase {
+    func testPerKeyLatency() {
+        let c = Composer(telex: TelexEngine(), pinyin: RealEngineTests.pinyin, english: RealEngineTests.english,
+                         settings: .init(), learnedFile: nil)
+        let text = "tooi ddi hocj tieengs Vieetj, I take the bus to work. ni3hao xiao4yang2shangshan wo3ai4ni3 "
+            + "nguowif dduowngf class test git mp3 iphone15 "
+        var times: [Double] = []
+        var field = ""
+        for _ in 0..<20 {
+            for ch in text {
+                let key: KeyInput = ch == " " ? .space : .char(ch)
+                let t0 = DispatchTime.now().uptimeNanoseconds
+                let o = c.handle(key, precedingText: String(field.suffix(200)))
+                times.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6)
+                field += o.commit
+                if !o.handled, key == .space { field += " " }
+            }
+        }
+        times.sort()
+        let avg = times.reduce(0, +) / Double(times.count)
+        let p99 = times[Int(Double(times.count) * 0.99)]
+        print(String(format: "per-key latency: avg %.3f ms, p99 %.3f ms, max %.3f ms over %d keys", avg, p99, times.last!, times.count))
+        XCTAssertLessThan(p99, 20)
+    }
+}

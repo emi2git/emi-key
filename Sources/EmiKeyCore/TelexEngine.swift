@@ -20,6 +20,7 @@ public struct TelexEngine: TelexTransforming {
     struct L { var base: Character; var mark: VMark = .none; var upper: Bool; var fromW = false }
     struct Result { var text: String; var action: Bool; var undone: Bool; var plausibleBeforeUndo: Bool }
 
+    static let finalPrefixes: Set<String> = ["", "c", "ch", "m", "n", "ng", "nh", "p", "t"]
     static let toneKeys: [Character: Int] = ["s": 1, "f": 2, "r": 3, "x": 4, "j": 5]
     static func isV(_ l: L) -> Bool { "aeiouy".contains(l.base) }
 
@@ -101,7 +102,9 @@ public struct TelexEngine: TelexTransforming {
         guard VietSyllable.initials.contains(initial) || initial == "q" else { return false }
         var i = fv
         while i < ls.count, isV(ls[i]) { i += 1 }
-        return !ls[i...].contains(where: isV)
+        // What follows the vowels must be (the start of) a Vietnamese final: `ababa` is no undo of `âbb`.
+        let final = String(ls[i...].map(\.base))
+        return !ls[i...].contains(where: isV) && Self.finalPrefixes.contains(final)
     }
 
     static func tonePosition(_ ls: [L], style: ToneStyle) -> Int? {

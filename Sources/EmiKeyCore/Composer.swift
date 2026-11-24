@@ -21,6 +21,7 @@ public final class Composer {
     private let learnedFile: URL?
 
     private var buffer = ""            // raw keys of the word being composed
+    private var shown = ""             // what the last output showed for the word (`marked`)
     private var chinese = false        // word has a tone digit
     private var override: Lang?        // Esc flip while composing (.vi / .en)
     private var cands: [PinyinCandidate] = []
@@ -49,6 +50,12 @@ public final class Composer {
         switch key {
         case .char(let c):
             if c.isASCII && c.isLetter {
+                // A run of letters this long is no word (key repeat, a pasted-in typing macro): keep what is
+                // shown and start over, so every key stays cheap.
+                if buffer.count >= Self.maxWord {
+                    let o = commitAsShown(); buffer.append(c)
+                    var n = composing(); n.commit = o.commit; return n
+                }
                 buffer.append(c)
                 return composing()
             }
@@ -68,9 +75,7 @@ public final class Composer {
         case .enter:
             // Enter is always the user's own Enter: finish the word as shown and pass the key on.
             if buffer.isEmpty { return ComposerOutput(handled: false) }
-            if chinese { var o = finish(commit: buffer); o.handled = false; return o }
-            var o = commitLatin(sep: "")
-            flippable = nil
+            var o = commitAsShown()
             o.handled = false
             return o
 
@@ -103,9 +108,9 @@ public final class Composer {
             return composing()
 
         case .tab, .other:
+            // Tab, arrows, ⌘/⌃/⌥ shortcuts: the word stays exactly as shown (no edit while the app handles the key).
             if buffer.isEmpty { return ComposerOutput(handled: false) }
-            var o = chinese ? finish(commit: buffer) : commitLatin(sep: "")
-            flippable = nil
+            var o = commitAsShown()
             o.handled = false
             return o
         }
@@ -128,7 +133,7 @@ public final class Composer {
         let text: String
         if buffer.isEmpty { text = "" }
         else if chinese { text = buffer }
-        else { text = decide(buffer).text }
+        else { text = shown.isEmpty ? decide(buffer).text : shown }
         reset()
         memory.removeAll(); flippable = nil; preceding = nil
         return text
@@ -222,18 +227,31 @@ public final class Composer {
         return detector.detect(memory.joined(separator: " "))
     }
 
+    /// Commits the word exactly as the last output showed it, so the document needs no edit.
+    private func commitAsShown() -> ComposerOutput {
+        let text = chinese ? buffer : (shown.isEmpty ? decide(buffer).text : shown)
+        if !chinese { remember(text) }
+        flippable = nil
+        return finish(commit: text)
+    }
+
+    static let maxWord = 48
+    static let maxLearned = 1000
+
     private func composing() -> ComposerOutput {
         refreshCandidates()
+        shown = ""
         if buffer.isEmpty { return ComposerOutput() }
-        if chinese { return ComposerOutput(marked: buffer, candidates: cands.map(\.text)) }
+        if chinese { shown = buffer; return ComposerOutput(marked: buffer, candidates: cands.map(\.text)) }
         let d = decide(buffer)
-        var shown = d.text
+        var text = d.text
         // Incomplete Vietnamese syllable (e.g. "vieet" before its tone) in a Vietnamese context: show the preview.
         if d.viet == nil, override != .en, !english.isWord(buffer), context() == .vi,
            let engine = telex as? TelexEngine, let p = engine.preview(buffer, style: settings.toneStyle) {
-            shown = p
+            text = p
         }
-        return ComposerOutput(marked: shown)
+        shown = text
+        return ComposerOutput(marked: text)
     }
 
     private func finish(commit: String) -> ComposerOutput {
@@ -241,7 +259,7 @@ public final class Composer {
         return ComposerOutput(commit: commit)
     }
 
-    private func reset() { buffer = ""; chinese = false; override = nil; cands = [] }
+    private func reset() { buffer = ""; shown = ""; chinese = false; override = nil; cands = [] }
 
     private func remember(_ w: String) {
         memory.append(w)
@@ -258,6 +276,12 @@ public final class Composer {
     private func record(_ raw: String, toVietnamese: Bool) {
         let k = raw.lowercased()
         learned[k, default: [:]][toVietnamese ? "vi" : "en", default: 0] += 1
+        // Keep the file small: only the most flipped words.
+        if learned.count > Self.maxLearned {
+            let keep = learned.sorted { $0.value.values.reduce(0, +) > $1.value.values.reduce(0, +) }.prefix(Self.maxLearned / 2)
+            learned = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
+            learned[k, default: [:]][toVietnamese ? "vi" : "en", default: 0] += 0
+        }
         guard let url = learnedFile, let data = try? JSONEncoder().encode(learned) else { return }
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: url, options: .atomic)

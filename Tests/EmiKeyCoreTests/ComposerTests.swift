@@ -279,3 +279,101 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(type("TOOI DDI BUS "), "TÔI ĐI BÚ ")
     }
 }
+
+final class ComposerEdgeTests: XCTestCase {
+    func make(learned: URL? = nil) -> Composer {
+        Composer(telex: TelexEngine(), pinyin: FakePinyin(), english: FakeEnglish(), settings: .init(), learnedFile: learned)
+    }
+
+    /// Enter / Tab / arrows / shortcuts keep the word exactly as shown: no edit, so the app gets the key cleanly.
+    func testNonTextKeysCommitAsShown() {
+        for key in [KeyInput.enter, .tab, .other] {
+            // Vietnamese context → an incomplete syllable shows its preview (viêt), which is not a valid word.
+            let c2 = make()
+            var last = ComposerOutput()
+            for ch in "vieet" { last = c2.handle(.char(ch), precedingText: "tôi đi ") }
+            XCTAssertEqual(last.marked, "viêt")
+            let o = c2.handle(key, precedingText: "tôi đi ")
+            XCTAssertEqual(o.commit, "viêt", "\(key)")
+            XCTAssertFalse(o.handled)
+            XCTAssertEqual(c2.lastDeleteCount, 0)
+        }
+    }
+
+    func testFlushCommitsAsShown() {
+        let c = make()
+        for ch in "vieet" { _ = c.handle(.char(ch), precedingText: "tôi đi ") }
+        XCTAssertEqual(c.flush(), "viêt")
+    }
+
+    func testEmptyKeysPassThrough() {
+        let c = make()
+        for k in [KeyInput.enter, .tab, .other, .space, .backspace, .escape] {
+            XCTAssertFalse(c.handle(k, precedingText: nil).handled, "\(k)")
+            XCTAssertEqual(c.handle(k, precedingText: "").commit, "")
+        }
+        XCTAssertEqual(c.flush(), "")
+        XCTAssertEqual(c.pick(3), ComposerOutput())
+    }
+
+    func testVeryLongWordStaysCheapAndExact() {
+        let c = make()
+        var field = ""
+        let s = String(repeating: "ab", count: 200)
+        for ch in s {
+            let o = c.handle(.char(ch), precedingText: nil)
+            field += o.commit
+            XCTAssertLessThanOrEqual(o.marked.count, Composer.maxWord)
+        }
+        field += c.flush()   // committed words + the word still being typed
+        XCTAssertEqual(field, s)
+    }
+
+    func testNonASCIIAndSymbols() {
+        let c = make()
+        var f = ""
+        for ch in "aé" { f += c.handle(.char(ch), precedingText: nil).commit }
+        XCTAssertEqual(f, "aé")
+        XCTAssertEqual(make().handle(.char("ß"), precedingText: nil).commit, "ß")
+        XCTAssertEqual(make().handle(.char("你"), precedingText: nil).commit, "你")
+        XCTAssertEqual(make().handle(.char("٣"), precedingText: nil).commit, "٣")   // non-ASCII digit: not a tone
+    }
+
+    func testPickOutOfRangeIsSafe() {
+        let c = make()
+        for ch in "ma3" { _ = c.handle(.char(ch), precedingText: nil) }
+        XCTAssertEqual(c.pick(99).marked, "ma3")
+        XCTAssertEqual(c.pick(-1).marked, "ma3")
+    }
+
+    func testCorruptLearnedFileIsIgnored() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("emikey-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("learned.json")
+        try Data("{not json".utf8).write(to: url)
+        let c = make(learned: url)
+        var f = ""
+        for ch in "bus " { let o = ch == " " ? c.handle(.space, precedingText: nil) : c.handle(.char(ch), precedingText: nil); f += o.commit }
+        XCTAssertEqual(f, "bus ")
+        _ = c.handle(.escape, precedingText: nil)   // rewrites the file as valid JSON
+        let d = try JSONDecoder().decode([String: [String: Int]].self, from: Data(contentsOf: url))
+        XCTAssertEqual(d["bus"]?["vi"], 1)
+    }
+
+    func testLearnedFileStaysSmall() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("emikey-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("learned.json")
+        var big: [String: [String: Int]] = [:]
+        for i in 0..<5000 { big["w\(i)"] = ["vi": i % 7] }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try JSONEncoder().encode(big).write(to: url)
+        let c = make(learned: url)
+        for ch in "bus" { _ = c.handle(.char(ch), precedingText: nil) }
+        _ = c.handle(.escape, precedingText: nil)
+        let d = try JSONDecoder().decode([String: [String: Int]].self, from: Data(contentsOf: url))
+        XCTAssertLessThanOrEqual(d.count, Composer.maxLearned)
+        XCTAssertNotNil(d["bus"])
+    }
+}

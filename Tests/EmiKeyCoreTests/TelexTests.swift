@@ -66,3 +66,14 @@ final class TelexTests: XCTestCase {
         XCTAssertFalse(VietSyllable.hasVietnameseMarks("di"))
     }
 }
+
+final class TelexUndoEdgeTests: XCTestCase {
+    func testUndoAcrossConsonantsNeverDropsLetters() {
+        let t = TelexEngine()
+        XCTAssertNil(t.transform("ababa", style: .new))
+        XCTAssertNil(t.transform("ababab", style: .new))
+        XCTAssertEqual(t.transform("ass", style: .new), "as")
+        XCTAssertEqual(t.transform("aaa", style: .new), "aa")
+        XCTAssertEqual(t.transform("tooo", style: .new), "too")
+    }
+}
