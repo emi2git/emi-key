@@ -9,6 +9,15 @@ One macOS input method for English, Vietnamese and Mandarin with no switching.
 - Menu: two checkmark items only — Traditional Chinese, Old tone style (hòa). No windows; super light (no timers or polling, dictionaries load once).
 - Direct insertion (like EVKey/OpenKey): the word being typed is real text, never underlined marked text. Each key becomes the smallest edit (replace only the changed tail); unchanged plain letters pass straight to the app. Apps that hide their text from input methods (cannot be edited in place) fall back to classic underlined marked text. Moving the cursor / clicking / switching app mid-word just forgets the word (the text stays).
 - Works in every app (Terminal and code editors included). Secure fields are skipped by macOS.
+  - Chromium/Electron: the first key after focusing a field may report no cursor (stay direct); a consumed Backspace still
+    reaches the page (so Backspace edits are passed on, leaving one character for it); an inline-autocomplete selection
+    after the cursor (address bar) does not end the word.
+  - Terminal.app: its reported cursor/text drift from the screen → edits use Emi Key's own record of the cursor and of
+    what it typed; Backspace/Esc go straight to the shell, a backward cursor jump ends the word.
+  - Ghostty: ignores replacement ranges → an edit is sent as DEL × n + the new text (like typing it).
+  - Apps whose cursor never moves (auto-detected, `UntrackedApps`) → marked text.
+  - After reinstalling Emi Key, Chrome/Electron apps and Ghostty that were already open must be relaunched once
+    (they keep the dead connection to the old process).
 - Offline. No network. Learned data in `~/Documents/Emi Key/` (learned.json).
 - Signed with `Apple Development: emi2git@gmail.com (76UQD6DDM8)`. Bundle id `com.emi2git.inputmethod.EmiKey`.
 
@@ -51,5 +60,6 @@ One macOS input method for English, Vietnamese and Mandarin with no switching.
 - `Sources/EmiKeyCore/` — pure Swift library, no AppKit: TelexEngine, VietSyllable, PinyinEngine, Dictionary, ContextDetector, Composer (the state machine taking key events → in-progress text / commit / candidates).
 - `Sources/EmiKey/` — IMK app: InputController, CandidateWindow, menu, icon.
 - `Tests/EmiKeyCoreTests/` — unit tests (`swift test`).
-- `Tests/e2e/` — types real keystrokes into TextEdit with Emi Key selected and checks the text.
+- `Tests/e2e/` — types real keystrokes into TextEdit, Chrome (page + address bar), Safari, Notes, Terminal, Ghostty with
+  Emi Key selected and checks the text (`--app`, `--field`); leaves no windows, notes, files or settings behind.
 - `build.sh` — build, sign, install to `~/Library/Input Methods`, restart the input method.

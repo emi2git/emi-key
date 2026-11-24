@@ -117,6 +117,15 @@ func raise(_ app: NSRunningApplication, _ w: AXUIElement) {
     }
     _ = waitFor(3) { NSWorkspace.shared.frontmostApplication == app && axFocusedWindow(app.processIdentifier).map { CFEqual($0, w) } == true }
 }
+/// Focus the first element with `role` inside `el` (depth-first), not descending into `skipping` (e.g. the toolbar).
+func axFocus(_ el: AXUIElement, role: String, skipping: String, depth: Int = 0) -> Bool {
+    if depth > 14 { return false }
+    let r = axAttr(el, kAXRoleAttribute) as? String
+    if r == role { return AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success }
+    if r == skipping { return false }
+    for c in (axAttr(el, kAXChildrenAttribute) as? [AXUIElement]) ?? [] where axFocus(c, role: role, skipping: skipping, depth: depth + 1) { return true }
+    return false
+}
 func axPressClose(_ w: AXUIElement) {
     if let b = axAttr(w, kAXCloseButtonAttribute) { AXUIElementPerformAction(b as! AXUIElement, kAXPressAction as CFString) }
 }
@@ -203,7 +212,7 @@ try? """
 <body style="font:20px -apple-system">
 <textarea id="textarea" rows="6" cols="60" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"\(fieldKind == "textarea" ? " autofocus" : "")></textarea><br>
 <input id="input" size="60" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"\(fieldKind == "input" ? " autofocus" : "")>
-<script>document.title = 'Emi Key e2e ' + location.search.slice(1); document.getElementById('\(fieldKind)').focus()</script>
+<script>document.title = 'Emi Key e2e ' + (location.search.slice(1) || (location.pathname.match(/emikey-test-(\\w+)\\.html$/) || [, ''])[1]); document.getElementById('\(fieldKind)').focus()</script>
 """.write(to: pageURL, atomically: true, encoding: .utf8)
 
 func textEdit() -> Target {
@@ -327,52 +336,69 @@ func chrome(user: Bool) -> Target {
     }, isOurs: { $0.contains("Emi Key e2e \(tag)") })
 }
 
+/// Safari, driven without AppleScript (no Automation prompt): `open` loads the page in a new window/tab, Accessibility
+/// reads the field and closes that window.
 func safari() -> Target {
     let b = "com.apple.Safari"
-    var win = "", tag = ""
+    var tag = ""
     return Target(bundle: b, setup: {
         launchIfNeeded(b)
-        guard let id = osa("tell application \"Safari\"\nmake new document with properties {URL:\"about:blank\"}\nreturn id of front window\nend tell") else { fail("cannot open a Safari window (Automation permission?)") }
-        win = id
-        cleanups.append { osa("tell application \"Safari\" to close window id \(win)", quiet: true) }
     }, open: {
-        guard let app = running(b) else { return false }
         tag = UUID().uuidString.prefix(8).lowercased()
-        osa("tell application \"Safari\" to set URL of current tab of window id \(win) to \(asLiteral(pageURL.absoluteString + "?" + tag))")
+        // Safari drops ?query and #hash on file URLs: the tag goes into a per-case copy's name.
+        let page = tmpDir.appendingPathComponent("emikey-test-\(tag).html")
+        try? FileManager.default.copyItem(at: pageURL, to: page)
+        run("/usr/bin/open", ["-a", "Safari", page.absoluteString])
+        guard let app = running(b) else { return false }
         var w: AXUIElement?
         guard waitFor(8, { w = axWindow(app.processIdentifier, titleContains: tag); return w != nil }), let w else { return false }
         raise(app, w)
-        return waitFor(4) { axFocusedValue(app.processIdentifier) == "" }
+        // `open` leaves the address bar focused: focus the page's field through Accessibility.
+        _ = waitFor(10) { axFocus(w, role: fieldKind == "input" ? "AXTextField" : "AXTextArea", skipping: "AXToolbar") }
+        return waitFor(6) { axFocusedValue(app.processIdentifier) == "" }
     }, read: {
         running(b).flatMap { axFocusedValue($0.processIdentifier) }
-    }, close: {}, isOurs: { $0.contains("Emi Key e2e \(tag)") })
+    }, close: {
+        guard let app = running(b), let w = axWindow(app.processIdentifier, titleContains: tag) else { return }
+        axPressClose(w)
+        _ = waitFor(3) { axWindow(app.processIdentifier, titleContains: tag) == nil }
+    }, isOurs: { $0.contains("Emi Key e2e \(tag)") })
 }
 
 func notes() -> Target {
     let b = "com.apple.Notes"
     var noteID = "", tag = ""
     func purge() {
-        // Deleted notes go to Recently Deleted; delete them there too so nothing is left.
-        osa("""
+        // Deleted notes go to Recently Deleted; delete them there too (by id: deleting while iterating misses some).
+        let ids = osa("""
         tell application "Notes"
+          set r to {}
           repeat with f in folders
             if name of f is "Recently Deleted" then
-              repeat with n in (notes of f whose name starts with "emikey e2e")
-                delete n
+              repeat with n in (notes of f whose name starts with "2026 e2e")
+                set end of r to id of n
               end repeat
             end if
           end repeat
+          set AppleScript's text item delimiters to linefeed
+          return r as text
         end tell
-        """, quiet: true)
+        """, quiet: true) ?? ""
+        for id in ids.split(separator: "\n") where !id.isEmpty {
+            osa("tell application \"Notes\" to delete note id \(asLiteral(String(id)))", quiet: true)
+        }
     }
     return Target(bundle: b, setup: {
+        // Notes' own autocorrect / auto-capitalisation stay on (it is the user's running app; not restarted):
+        // differences like "Tôi" or "đi" → "dì" are Notes, not Emi Key.
         launchIfNeeded(b)
         cleanups.append { purge() }
     }, open: {
         guard let app = running(b) else { return false }
-        tag = UUID().uuidString.prefix(8).lowercased()
+        // Digits only: the title line is the text before the cursor, it must not look English or Vietnamese.
+        tag = String(Int.random(in: 10_000_000...99_999_999))
         // A fresh note in its own window (Notes names a note after its first line).
-        guard let id = osa("tell application \"Notes\"\nset n to make new note with properties {body:\"<div>emikey e2e \(tag)</div><div><br></div>\"}\nreturn id of n\nend tell") else { return false }
+        guard let id = osa("tell application \"Notes\"\nset n to make new note with properties {body:\"<div>2026 e2e \(tag)</div><div><br></div>\"}\nreturn id of n\nend tell") else { return false }
         noteID = id
         osa("tell application \"Notes\" to show note id \(asLiteral(id)) separately true")
         var w: AXUIElement?
@@ -385,14 +411,17 @@ func notes() -> Target {
         return true
     }, read: {
         guard let t = osa("tell application \"Notes\" to get plaintext of note id \(asLiteral(noteID))") else { return nil }
-        let prefix = "emikey e2e \(tag)\n"
-        return t.hasPrefix(prefix) ? String(t.dropFirst(prefix.count)) : "<\(t)>"
+        let prefix = "2026 e2e \(tag)\n"
+        guard t.hasPrefix(prefix) else { return "<\(t)>" }
+        var rest = Substring(t.dropFirst(prefix.count))
+        if rest.hasPrefix("\n") { rest = rest.dropFirst() }   // the empty line the cursor was put on
+        return String(rest)
     }, close: {
         if let app = running(b), let w = axWindow(app.processIdentifier, titleContains: tag) { axPressClose(w); pause(0.3) }
         osa("tell application \"Notes\" to delete note id \(asLiteral(noteID))", quiet: true)
         pause(0.3)
         purge()
-    }, isOurs: { $0.contains("emikey e2e \(tag)") })
+    }, isOurs: { $0.contains("2026 e2e \(tag)") })
 }
 
 /// Terminals: a new window running `cat > file`; Ctrl-D ends it and the file holds what was typed.
@@ -529,7 +558,9 @@ func runCase(_ input: String) -> (got: String, disturbed: Bool) {
 for (input, expected) in cases where !target.skip(input) {
     var r = runCase(input)
     for _ in 0..<3 where r.disturbed { print("  (user typed during \"\(input)\", retrying)"); r = runCase(input) }
-    let ok = expected.hasPrefix("~") ? r.got.contains(expected.dropFirst()) : r.got == expected
+    // Notes capitalises sentence starts itself (it is the user's app; its settings are left alone): ignore case there.
+    let (g, e) = appName == "notes" ? (r.got.lowercased(), expected.lowercased()) : (r.got, expected)
+    let ok = e.hasPrefix("~") ? g.contains(e.dropFirst()) : g == e
     rows.append((input, expected, r.got, ok))
 }
 let elapsed = Int(Date().timeIntervalSince(started)) + 2

@@ -114,6 +114,8 @@ final class InputController: IMKInputController {
         if blind, let c = caret { return c }
         let l = client.selectedRange().location
         if blind, caret == nil { shadow = "" }
+        // Blind apps only edit relative to the cursor; when Terminal does not say where it is, any origin will do.
+        if blind, l == NSNotFound { return 1 << 20 }
         return l == NSNotFound ? nil : l
     }
 
@@ -318,14 +320,31 @@ final class InputController: IMKInputController {
         super.activateServer(sender)
         state.forceHidden = state.defaults.bool(forKey: "ForceHidden")
         state.debug = state.defaults.bool(forKey: "DebugLog")
-        dbg("activate \((sender as? IMKTextInput)?.bundleIdentifier() ?? "?")")
+        let id = (sender as? IMKTextInput)?.bundleIdentifier()
+        dbg("activate \(id ?? "?")")
+        // Chromium deactivates and re-activates the input method right after the first key in a newly focused field:
+        // keep the word when that blip comes straight back to this same controller and app.
+        if let p = Self.pending, p.controller == ObjectIdentifier(self), p.bundle == id, Date().timeIntervalSince(p.time) < 0.5 {
+            Self.pending = nil
+            return
+        }
+        Self.pending = nil
         reset()
         freshField = true
     }
 
+    private static var pending: (controller: ObjectIdentifier, bundle: String?, time: Date)?
+
     override func deactivateServer(_ sender: Any!) {
-        dbg("deactivate \((sender as? IMKTextInput)?.bundleIdentifier() ?? "?")")
-        reset(sender)
+        let id = (sender as? IMKTextInput)?.bundleIdentifier()
+        dbg("deactivate \(id ?? "?")")
+        if !markedMode, !hasMarked, !shown.isEmpty {
+            // Direct mode: the word is already plain text in the document, nothing to commit. Decide on activation.
+            Self.pending = (ObjectIdentifier(self), id, Date())
+            CandidateWindow.shared.hide()
+        } else {
+            reset(sender)
+        }
         super.deactivateServer(sender)
     }
 
