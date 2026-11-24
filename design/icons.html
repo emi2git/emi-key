@@ -1,0 +1,94 @@
+<title>Emi Key Icons</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500&display=swap">
+<style>
+/* Layout: one row of four concept cards; each shows app icon, then light + dark menu bar at real size */
+:root{
+  --bg:#f3f5f8; --card:#ffffff; --fg:#17202b; --muted:#5d6a7a; --line:#dde3ea;
+  --en:#3b82d6; --vi:#d9402b; --zh:#e9a91c; --tile:#1b2633;
+  --barL:#eceef1; --barLfg:#1a1a1a; --barD:#2a2c30; --barDfg:#f2f2f2;
+  --display:"Space Grotesk",system-ui,sans-serif; --body:"Inter",system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#11161d;--card:#19212b;--fg:#e8edf3;--muted:#98a5b5;--line:#2a3542;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#11161d;--card:#19212b;--fg:#e8edf3;--muted:#98a5b5;--line:#2a3542;color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:32px 48px}
+.wrap{max-width:1100px;margin:0 auto;display:flex;flex-direction:column;gap:24px}
+h1{font-family:var(--display);font-size:2rem;margin:0;text-wrap:balance}
+.sub{color:var(--muted);margin:0;max-width:65ch;line-height:1.5}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:.85rem;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.dot{width:10px;height:10px;border-radius:50%}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:16px;min-width:0}
+.head{display:flex;align-items:baseline;gap:10px}
+.letter{font-family:var(--display);font-weight:700;font-size:1.4rem}
+.name{font-family:var(--display);font-weight:500}
+.app{display:flex;justify-content:center;padding-block:6px}
+.app svg{width:128px;height:128px;filter:drop-shadow(0 6px 12px rgba(0,0,0,.18))}
+.bar{display:flex;align-items:center;justify-content:flex-end;gap:14px;height:28px;border-radius:6px;padding:0 12px;font:500 13px system-ui}
+.bar.l{background:var(--barL);color:var(--barLfg);--knock:var(--barL)}
+.bar.d{background:var(--barD);color:var(--barDfg);--knock:var(--barD)}
+.bar svg{width:18px;height:18px}
+.bar .me{outline:1.5px dashed currentColor;outline-offset:3px;border-radius:3px;opacity:1}
+.bar .other{opacity:.55;font-size:12px}
+.desc{color:var(--muted);font-size:.9rem;line-height:1.45;margin:0}
+.lbl{font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+</style>
+
+<div class="wrap">
+  <h1>Emi Key icons</h1>
+  <p class="sub">Variations on C that don’t look like a git branch. Each one shows the app icon used in Settings, then the real menu-bar size in light and dark mode. The dashed box marks Emi Key in the bar.</p>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--en)"></i>English</span>
+    <span><i class="dot" style="background:var(--vi)"></i>Tiếng Việt</span>
+    <span><i class="dot" style="background:var(--zh)"></i>中文</span>
+  </div>
+  <div class="grid" id="grid"></div>
+</div>
+
+<script>
+const S='stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"';
+function bubble(x,y,w,h,r,tx){ // tx = tail x
+  return `M${x+r} ${y}H${x+w-r}A${r} ${r} 0 0 1 ${x+w} ${y+r}V${y+h-r}A${r} ${r} 0 0 1 ${x+w-r} ${y+h}H${tx+3}L${tx} ${y+h+3}V${y+h}H${x+r}A${r} ${r} 0 0 1 ${x} ${y+h-r}V${y+r}A${r} ${r} 0 0 1 ${x+r} ${y}Z`;
+}
+const B=[bubble(1.2,1.5,11,8,2.5,3.5),bubble(11.8,3.5,11,8,2.5,18),bubble(6.5,11,11,8,2.5,9)];
+const head="M4.5 9L5.2 3.5L9.3 6.8Q12 6 14.7 6.8L18.8 3.5L19.5 9Q21 12 19.6 15.4Q17.2 20 12 20Q6.8 20 4.4 15.4Q3 12 4.5 9Z";
+const wL=["M7.5 13.6L1 12.4","M7.5 15L0.8 15.4","M7.8 16.4L1.6 18.6"], wR=wL.map(p=>p.replace(/([\d.]+) ([\d.]+)/g,(m,a,b)=>`${(24-a).toFixed(1)} ${b}`));
+const br=["M12 13.5C12 9.5 8.5 7 4.5 4","M12 21.5V3","M12 13.5C12 9.5 15.5 7 19.5 4"];
+const tips=[[4.5,4],[12,3],[19.5,4]];
+const pet=["M12 17C7 17 3.4 13.2 2.8 8.6C7 9 10.6 12 12 17Z","M12 2.8C15.2 6.6 15.2 13 12 17C8.8 13 8.8 6.6 12 2.8Z","M12 17C17 17 20.6 13.2 21.2 8.6C17 9 13.4 12 12 17Z"];
+const C=['var(--en)','var(--vi)','var(--zh)'];
+
+const nib="M12 22L8.8 16.6Q8.8 14.4 12 13.4Q15.2 14.4 15.2 16.6Z";
+const waves=["M10 11.5C8 9.5 9.5 7.5 7.5 5.5S6 2.5 4.5 2","M12 11V2","M14 11.5C16 9.5 14.5 7.5 16.5 5.5S18 2.5 19.5 2"];
+const waves2=["M10.5 11.5C9 9 10.5 6.5 8.5 4S6.5 2 5 1.8","M12 11.2C11 8.5 13 5.5 12 2","M13.5 11.5C15 9 13.5 6.5 15.5 4S17.5 2 19 1.8"];
+const brush=["M12 22C9.5 16 6.5 10 3 5C7.5 8 10.8 13.5 12 22Z","M12 22C10.6 15 10.6 8 12 2C13.4 8 13.4 15 12 22Z","M12 22C14.5 16 17.5 10 21 5C16.5 8 13.2 13.5 12 22Z"];
+const lobes=[[12,4.6],[8.4,9.6],[15.6,9.6]];
+const ideas=[
+ {k:'C',n:'Original (git look)',d:'For reference: straight branches with dots read as a git branch.',
+  menu:()=>br.map(p=>`<path d="${p}" fill="none" ${S}/>`).join('')+tips.map(([x,y])=>`<circle cx="${x}" cy="${y}" r="1.7" fill="currentColor"/>`).join(''),
+  app:()=>br.map((p,i)=>`<path d="${p}" fill="none" stroke="${C[i]}" stroke-width="2" stroke-linecap="round"/>`).join('')+`<path d="M12 21.5V13.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>`+tips.map(([x,y],i)=>`<circle cx="${x}" cy="${y}" r="2" fill="${C[i]}"/>`).join('')},
+ {k:'C1',n:'Pen nib with ink',d:'A fountain-pen nib. Three wavy ink lines flow out of it, one per language.',
+  menu:()=>`<path d="${nib}" fill="var(--knock)" ${S}/><path d="M12 22V18" ${S}/><circle cx="12" cy="16.4" r=".8" fill="currentColor"/>`+waves2.map(p=>`<path d="${p}" fill="none" ${S}/>`).join(''),
+  app:()=>waves2.map((p,i)=>`<path d="${p}" fill="none" stroke="${C[i]}" stroke-width="1.8" stroke-linecap="round"/>`).join('')+`<path d="${nib}" fill="#fff"/><path d="M12 22V18" stroke="var(--tile)" stroke-width=".9" stroke-linecap="round"/><circle cx="12" cy="16.4" r=".8" fill="var(--tile)"/>`},
+ {k:'C2',n:'Brush strokes',d:'Three calligraphy brush strokes from one point, like a sprout or a flame.',
+  menu:()=>brush.map(p=>`<path d="${p}" fill="currentColor"/>`).join(''),
+  app:()=>brush.map((p,i)=>`<path d="${p}" fill="${C[i]}"/>`).join('')},
+ {k:'C3',n:'Three-loop key',d:'A real key for Emi Key. The handle is three loops, one per language.',
+  menu:()=>lobes.map(([x,y])=>`<circle cx="${x}" cy="${y}" r="3.1" fill="var(--knock)" ${S}/>`).join('')+`<path d="M12 12.6V22M12 17.5H15M12 20.5H14.3" fill="none" ${S}/>`,
+  app:()=>lobes.map(([x,y],i)=>`<circle cx="${x}" cy="${y}" r="3.1" fill="${C[i]}" stroke="#fff" stroke-width=".8"/>`).join('')+`<path d="M12 12.6V22M12 17.5H15M12 20.5H14.3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`}
+];
+
+const tile=g=>`<svg viewBox="0 0 100 100" role="img"><defs><linearGradient id="t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#263445"/><stop offset="1" stop-color="#151e29"/></linearGradient></defs><rect width="100" height="100" rx="23" fill="url(#t)"/><g transform="translate(14 13) scale(3)">${g}</g></svg>`;
+const ic=g=>`<svg viewBox="0 0 24 24" class="me" aria-hidden="true">${g}</svg>`;
+const bar=(cls,g)=>`<div class="bar ${cls}"><span class="other">Wi‑Fi</span>${ic(g)}<span>Tue 24 Nov 9:41</span></div>`;
+
+document.getElementById('grid').innerHTML=ideas.map(i=>`
+ <section class="card">
+  <div class="head"><span class="letter">${i.k}</span><span class="name">${i.n}</span></div>
+  <div class="app">${tile(i.app())}</div>
+  <div class="lbl">Menu bar</div>
+  ${bar('l',i.menu())}${bar('d',i.menu())}
+  <p class="desc">${i.d}</p>
+ </section>`).join('');
+</script>
