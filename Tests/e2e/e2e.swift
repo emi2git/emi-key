@@ -467,7 +467,7 @@ func terminal(ghostty: Bool, separate: Bool = false) -> Target {
         return try? String(contentsOf: file, encoding: .utf8)
     }, close: {
         if separate {
-            if let i = instance, !waitFor(3, { i.isTerminated }) { i.terminate(); _ = waitFor(3) { i.isTerminated } }
+            if let i = instance, !waitFor(3, { i.isTerminated }) { i.terminate(); if !waitFor(3, { i.isTerminated }) { i.forceTerminate() } }
         } else if ghostty { osa("tell application \"Ghostty\" to close window id \(asLiteral(winID))", quiet: true) }
         else { osa("tell application \"Terminal\" to close (every window whose id is \(winID))", quiet: true) }
         if let w = ourWindow() { axPressClose(w) }
