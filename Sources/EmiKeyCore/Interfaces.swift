@@ -1,4 +1,4 @@
-// Shared contracts between the engines. Owned by the main session — change only by agreement.
+// Shared contracts between the engines and the Composer (EmiKeyCore) and the IMK app (EmiKey).
 import Foundation
 
 public enum Lang: Equatable, Sendable { case en, vi, zh }

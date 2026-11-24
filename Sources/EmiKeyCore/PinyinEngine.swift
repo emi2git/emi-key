@@ -332,6 +332,24 @@ public final class PinyinEngine: PinyinLookup, @unchecked Sendable {
         return best[n]
     }
 
+    static let splitWordMinWeight: Float = 1000
+
+    /// Does this reading (dictionary words over syllables `q`) contain a common word with the typed tones that covers
+    /// exactly one syllable of the `primary` reading (西安 = xi an where the primary reading has the one syllable xian)?
+    private func splitsIntoWord(_ es: [Int32], _ q: [QSyl], primary: [QSyl]) -> Bool {
+        let spans = Set(primary.indices.map { (($0 == 0 ? 0 : primary[$0 - 1].end) << 16) | primary[$0].end })
+        var k = 0
+        for e in es {
+            let en = entries[Int(e)], n = Int(en.n)
+            defer { k += n }
+            guard n > 1, k + n <= q.count, weight[Int(e)] >= Self.splitWordMinWeight else { continue }
+            let exact = (0..<n).allSatisfy { q[k + $0].tone == 0 || tones[Int(en.syl) + $0] == q[k + $0].tone }
+            let span = ((k == 0 ? 0 : q[k - 1].end) << 16) | q[k + n - 1].end
+            if exact, spans.contains(span) { return true }
+        }
+        return false
+    }
+
     public func candidates(for input: String, traditional: Bool, limit: Int) -> [PinyinCandidate] {
         guard limit > 0 else { return [] }
         let segs = parseInput(input)
@@ -374,6 +392,15 @@ public final class PinyinEngine: PinyinLookup, @unchecked Sendable {
         }
         let wholeCap = max(1, limit - min(prefixOut.count, max(limit / 3, 1)))
         var out = Array(wholeOut.prefix(wholeCap))
+        // Another way to split the syllables (xian → xi an) loses on frequency against common single characters,
+        // but when that split spells a common word (西安, 去西安) it is offered too, in the last whole-input slot.
+        if segs.count > 1, out.count >= 2,
+           let a = whole.first(where: { $0.seg != primary && splitsIntoWord($0.entries, segs[$0.seg], primary: q) }),
+           case let t = text(a.entries, traditional: traditional), !out.contains(where: { $0.text == t }) {
+            let c = PinyinCandidate(text: t, consumed: segs[a.seg].last!.end)
+            if out.count >= wholeCap { out[out.count - 1] = c } else { out.append(c) }
+            seen.insert(t)
+        }
         out += prefixOut.prefix(limit - out.count)
         if out.count < limit { out += wholeOut.dropFirst(wholeCap).prefix(limit - out.count) }
         return out

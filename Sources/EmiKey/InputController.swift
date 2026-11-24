@@ -51,13 +51,16 @@ final class InputController: IMKInputController {
     }
 
     private func process(_ event: NSEvent, client: IMKTextInput) -> Bool {
-        let key = Self.keyInput(event)
+        var key = Self.keyInput(event)
         let sel = client.selectedRange()
         if state.debug {
             let around = sel.location == NSNotFound ? nil : client.attributedSubstring(from: NSRange(location: max(0, sel.location - 12), length: min(12, sel.location)))?.string
             log.notice("dbg key=\(String(describing: key), privacy: .public) ctl=\(ObjectIdentifier(self).hashValue, privacy: .public) app=\(client.bundleIdentifier() ?? "?", privacy: .public) sel=\(sel.location, privacy: .public),\(sel.length, privacy: .public) caret=\(self.caret.map(String.init) ?? "nil", privacy: .public) shown=\(self.shown, privacy: .public) before=\(around ?? "<nil>", privacy: .public) marked=\(client.markedRange().location, privacy: .public)")
         }
         blind = state.isBlind(client.bundleIdentifier()) && !state.forceHidden
+        // Terminals: Esc belongs to the program (vim leaves insert mode, readline's Meta prefix) — never a flip.
+        // The word stays as shown and Esc goes through. (Terminal.app does not even pass Esc to input methods.)
+        if key == .escape, state.isBlind(client.bundleIdentifier()) { key = .other }
         if blind {
             // Terminal.app handles Backspace/Esc itself (they never reach us) while nothing is marked. Its cursor
             // drifts forward on some letters but only goes back when text was deleted: then forget the word.
@@ -108,7 +111,7 @@ final class InputController: IMKInputController {
         if markedMode, hasMarked, case let m = client.markedRange(), m.location != NSNotFound { start = m.location }
         let out = composer.handle(key, precedingText: precedingText(client, start))
         if state.keyLog || state.debug {
-            log.notice("key handled=\(out.handled, privacy: .public) delete=\(self.composer.deleteCount, privacy: .public) marked=\(self.markedMode, privacy: .public)")
+            log.notice("key handled=\(out.handled, privacy: .public) delete=\(self.composer.lastDeleteUTF16Count, privacy: .public) marked=\(self.markedMode, privacy: .public)")
         }
         return apply(out, client: client, event: event, key: key)
     }

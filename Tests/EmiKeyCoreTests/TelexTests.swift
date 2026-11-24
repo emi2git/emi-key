@@ -26,6 +26,9 @@ final class TelexTests: XCTestCase {
             ("hocj", "học"), ("sachs", "sách"), ("anhr", "ảnh"), ("mootj", "một"), ("hai", nil), ("baa", nil),
             ("gif", "gì"), ("gias", "giá"), ("quoocs", "quốc"), ("cos", "có"), ("khongz", nil), ("khoongsz", "không"),
             ("ddaauf", "đầu"), ("dduwngs", "đứng"), ("ngoaif", "ngoài"), ("khuyar", "khuỷa"), ("tiens", nil /* iê needs ê */),
+            // Open ươ does not exist: `uow` with nothing after the o is uơ.
+            ("thuowr", "thuở"), ("Thuowr", "Thuở"), ("huow", "huơ"), ("wow", nil), ("dduowcj", "được"),
+            ("muwowif", "mười"), ("nguwowif", "người"), ("huwowu", "hươu"), ("thuwowr", "thuở"),
         ])
     }
 

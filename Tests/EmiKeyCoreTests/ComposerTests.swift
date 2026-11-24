@@ -124,15 +124,6 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(type("hello\nworld "), "hello\nworld ")
     }
 
-    func testIsActive() {
-        let c = make()
-        XCTAssertFalse(c.isActive)
-        _ = c.handle(.char("b"), precedingText: nil)
-        XCTAssertTrue(c.isActive)
-        _ = c.flush()
-        XCTAssertFalse(c.isActive)
-    }
-
     func testMarkedText() {
         XCTAssertEqual(out("vieetj").marked, "việt")
         XCTAssertEqual(out("bu").marked, "bu")

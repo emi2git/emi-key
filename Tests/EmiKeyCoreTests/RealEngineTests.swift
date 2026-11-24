@@ -44,6 +44,12 @@ final class RealEngineTests: XCTestCase {
             ("vieetj⎋ ", nil, "vieetj "),
             ("the bus ⎋", nil, "the bú "),
             ("has ", "I ", "I has "),
+            // Common English words with a tone key before a consonant stay English even after Vietnamese words…
+            ("tooi test ", nil, "tôi test "), ("tooi ddi test lisst ", nil, "tôi đi test list "),
+            ("hocj rest best ", "", "học rest best "), ("tooi test⎋ ", nil, "tôi tét "), ("tooi test ⎋", nil, "tôi tét "),
+            // …while the usual Telex order (tone last) still gives Vietnamese.
+            ("tooi tets ", nil, "tôi tét "), ("trowif rets ", nil, "trời rét "), ("cho con bus ", "tôi ", "tôi cho con bú "),
+            ("thuowr nhor ", nil, "thuở nhỏ "),
         ]
         var fails: [String] = []
         for (input, pre, want) in cases {

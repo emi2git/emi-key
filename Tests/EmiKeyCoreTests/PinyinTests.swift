@@ -56,8 +56,15 @@ final class PinyinTests: XCTestCase {
 
     func testAmbiguousSegmentation() {
         XCTAssertTrue(texts("xian1", limit: 20).contains("先"))
-        XCTAssertTrue(texts("xian", limit: 20).contains("西安"))
         XCTAssertEqual(texts("xi1an1").first, "西安")
+        // The other split of an untoned syllable is offered within the 9-slot bar when it spells a common word.
+        XCTAssertTrue(texts("xian").contains("西安"), "\(texts("xian"))")
+        XCTAssertEqual(texts("xian").first, "现")
+        XCTAssertTrue(texts("qu4xian").contains("去西安"), "\(texts("qu4xian"))")
+        // …but rare words (几案 ji an) and non-words do not take a slot.
+        XCTAssertFalse(texts("jian4").contains("几案"))
+        XCTAssertEqual(texts("ni3hao").first, "你好")
+        XCTAssertEqual(texts("tian1an1men2").first, "天安门")
     }
 
     func testTraditional() {

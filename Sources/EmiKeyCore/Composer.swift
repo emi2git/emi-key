@@ -116,9 +116,6 @@ public final class Composer {
         }
     }
 
-    /// True while a word is being composed or the last committed word may still be flipped with Esc.
-    public var isActive: Bool { !buffer.isEmpty || flippable != nil }
-
     /// Pick candidate index (0-based) by mouse click in the candidate bar.
     public func pick(_ index: Int) -> ComposerOutput {
         lastDeleteCount = 0; lastDeleteUTF16Count = 0
@@ -203,6 +200,9 @@ public final class Composer {
         if let o = override { return o == .vi ? (t, t, true) : (raw, t, false) }
         if english.isWord(raw) {
             if t.allSatisfy({ $0.isASCII }) { return (raw, t, false) }   // only an undo happened (`less` → les)
+            // A common English word with a tone key before a consonant (`test` tét, `rest` rét, `corn` cỏn): Telex
+            // typists put the tone last (`tets`), so this spelling is English, whatever the context.
+            if Self.toneBeforeConsonant(raw), (english.rank(raw) ?? Int.max) <= Self.commonEnglish { return (raw, t, false) }
             let ctx = context()
             // A lone Vietnamese vowel (`oo` ô, `ow` ơ, `uw` ư, `af` à, `ee` ê, `ooi` ôi) beats a rare English
             // "word" (interjections, abbreviations) unless the text around is English. Common words (`as`, `is`, `of`) stay.
@@ -214,6 +214,21 @@ public final class Composer {
             }
         }
         return (t, t, true)
+    }
+
+    static let commonEnglish = 5000
+
+    /// A tone key (s f r x j) after the first vowel, followed by a consonant letter (`test`, `bars`, `corn`;
+    /// not `vietje`, where the e after the tone key is a mark).
+    static func toneBeforeConsonant(_ raw: String) -> Bool {
+        let w = Array(raw.lowercased())
+        guard let v = w.firstIndex(where: { "aeiouy".contains($0) }) else { return false }
+        var i = v + 1
+        while i + 1 < w.count {
+            if "sfrxj".contains(w[i]), !"aeiouyw".contains(w[i + 1]) { return true }
+            i += 1
+        }
+        return false
     }
 
     /// Vietnamese syllable made of vowels only (no consonant letters): ô, ơ, à, ôi, ươi …

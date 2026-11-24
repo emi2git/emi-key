@@ -8,7 +8,11 @@ public struct TelexEngine: TelexTransforming {
     public func transform(_ raw: String, style: ToneStyle) -> String? {
         guard let r = Self.process(raw, style: style) else { return nil }
         if r.undone { return r.plausibleBeforeUndo ? r.text : nil }
-        return r.action && VietSyllable.isValid(r.text) ? r.text : nil
+        guard r.action else { return nil }
+        if VietSyllable.isValid(r.text) { return r.text }
+        // `uow` horns both vowels (ươ: người, được), but ươ needs a final consonant: an open one is uơ (thuở, huơ).
+        if let o = Self.process(raw, style: style, openUo: true), VietSyllable.isValid(o.text) { return o.text }
+        return nil
     }
 
     /// Rendering without the validity check (for live display while a syllable is still incomplete).
@@ -24,7 +28,7 @@ public struct TelexEngine: TelexTransforming {
     static let toneKeys: [Character: Int] = ["s": 1, "f": 2, "r": 3, "x": 4, "j": 5]
     static func isV(_ l: L) -> Bool { "aeiouy".contains(l.base) }
 
-    static func process(_ raw: String, style: ToneStyle) -> Result? {
+    static func process(_ raw: String, style: ToneStyle, openUo: Bool = false) -> Result? {
         var ls: [L] = []
         var tone = 0, action = false, undone = false, plausible = false
         for ch in raw {
@@ -81,6 +85,10 @@ public struct TelexEngine: TelexTransforming {
                 continue
             }
             ls.append(literal)
+        }
+        if openUo, ls.count >= 3, case let n = ls.count, ls[n - 2].base == "u", ls[n - 2].mark == .horn, !ls[n - 2].fromW,
+           ls[n - 1].base == "o", ls[n - 1].mark == .horn {
+            ls[n - 2].mark = .none
         }
         return Result(text: render(ls, tone: tone, style: style), action: action, undone: undone,
                       plausibleBeforeUndo: plausible)
