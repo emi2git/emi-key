@@ -15,6 +15,7 @@ final class InputController: IMKInputController {
     private var shown = ""
     /// Where the cursor should be after our last edit (nil = unknown, or the app hides its text).
     private var caret: Int?
+    private var lastLoc: Int?
     /// Marked-text mode for the current word: the app hides its text, so we could not replace what we inserted.
     /// Then (and only then) the word is shown as classic marked text.
     private var markedMode = false
@@ -36,9 +37,15 @@ final class InputController: IMKInputController {
         let sel = client.selectedRange()
         let loc: Int? = sel.location == NSNotFound ? nil : sel.location
         // Cursor moved / clicked elsewhere / selection: the shown text simply stays; forget the word.
-        if let c = caret, loc != c || sel.length != 0 { reset() }
+        if let c = caret, loc != c || sel.length != 0 {
+            // The app's cursor did not move although we typed into it (e.g. Ghostty, some terminals and
+            // Electron apps report a fixed location). It can't be edited in place: use marked text there from now on.
+            if let l = loc, l == lastLoc, sel.length == 0, !shown.isEmpty { state.markUntracked(client.bundleIdentifier()) }
+            reset()
+        }
+        lastLoc = loc
         if shown.isEmpty && !hasMarked {
-            markedMode = readable(client, loc) == false
+            markedMode = state.isUntracked(client.bundleIdentifier()) || readable(client, loc) == false
         }
         var start = loc.map { $0 - shown.utf16.count }
         if markedMode, hasMarked, case let m = client.markedRange(), m.location != NSNotFound { start = m.location }

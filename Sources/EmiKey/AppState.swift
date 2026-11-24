@@ -14,6 +14,17 @@ final class AppState {
     /// that hides its text, to exercise the marked-text fallback. Re-read when a text field gains focus.
     var forceHidden = false
 
+    /// Apps whose reported cursor never moves; they get marked (underlined) text instead of in-place editing.
+    /// Ghostty is known up front so the very first word there works too.
+    private lazy var untracked: Set<String> = Set(defaults.stringArray(forKey: "UntrackedApps") ?? [])
+        .union(["com.mitchellh.ghostty"])
+    func isUntracked(_ id: String?) -> Bool { id.map { untracked.contains($0) } ?? false }
+    func markUntracked(_ id: String?) {
+        guard let id, !untracked.contains(id) else { return }
+        untracked.insert(id)
+        defaults.set(Array(untracked), forKey: "UntrackedApps")
+    }
+
     private init() {
         // A suite named after our own bundle id is our standard domain (UserDefaults refuses that name as a suite).
         defaults = Bundle.main.bundleIdentifier == Self.bundleID ? .standard : (UserDefaults(suiteName: Self.bundleID) ?? .standard)
