@@ -25,6 +25,8 @@ final class InputController: IMKInputController {
     /// Blind apps: the text Emi Key knows is just before `caret` (what it typed since tracking began).
     private var shadow = ""
     private var lastReported: Int?
+    /// Where the cursor should be after our last edit even when the text could not be read (see `caret`).
+    private var guess: Int?
     /// No key handled yet since the text field gained focus.
     private var freshField = true
 
@@ -69,13 +71,10 @@ final class InputController: IMKInputController {
             reset()
         }
         lastLoc = loc
-        // Cursor position was unknown after the last key (e.g. the word began at the very start of the field):
-        // make sure the word is still right before the cursor (a click elsewhere leaves it behind).
-        if caret == nil, !shown.isEmpty, !markedMode, !blind, let l = loc, l >= shown.utf16.count,
-           let before = client.attributedSubstring(from: NSRange(location: l - shown.utf16.count, length: shown.utf16.count))?.string,
-           before != shown {
-            reset()
-        }
+        // The app's text was unreadable after the last key (word began at the very start of the field), so `caret`
+        // is unknown — but where the cursor should be is known: if it is elsewhere now (a click), forget the word.
+        if caret == nil, let g = guess, !shown.isEmpty, !markedMode, !blind, let l = loc, l != g { reset() }
+        guess = nil
         if shown.isEmpty && !hasMarked {
             // Right after a field gains focus Chromium may not have told macOS where the cursor is yet
             // (selectedRange = NotFound for the first key). That says nothing about the app: stay direct.
@@ -86,7 +85,9 @@ final class InputController: IMKInputController {
         var start = loc.map { $0 - shown.utf16.count }
         if markedMode, hasMarked, case let m = client.markedRange(), m.location != NSNotFound { start = m.location }
         let out = composer.handle(key, precedingText: precedingText(client, start))
-        dbg("out handled=\(out.handled) delete=\(composer.deleteCount) marked=\(markedMode)")
+        if state.keyLog || state.debug {
+            log.notice("key handled=\(out.handled, privacy: .public) delete=\(self.composer.deleteCount, privacy: .public) marked=\(self.markedMode, privacy: .public)")
+        }
         return apply(out, client: client, event: event, key: key)
     }
 
@@ -179,7 +180,7 @@ final class InputController: IMKInputController {
         let delCount = del?.count ?? (n + shown.count)
         let ins = String(target.dropFirst(common))
         let newShown = out.marked
-        func expect(_ c: Int?) { caret = canRead && out.handled ? c : nil }
+        func expect(_ c: Int?) { caret = canRead && out.handled ? c : nil; guess = out.handled ? c : nil }
         // Blind apps: keep our record of the text before the cursor in step with the edit.
         let oldChars = old?.count ?? (n + shown.count)
         defer {
@@ -246,13 +247,6 @@ final class InputController: IMKInputController {
             // replace by range if we know the cursor, else just append.
             caret = nil
             dbg("unverified del=\(del ?? "nil") delCount=\(delCount) ins=\(ins) loc=\(loc.map(String.init) ?? "nil") canRead=\(canRead)")
-            if canRead {
-                // The app shows us its text and it is not our word: never delete what we cannot see is ours.
-                // Leave the document alone and forget the word; the key goes to the app.
-                _ = composer.flush()
-                shown = ""
-                return false
-            }
             if let del, let loc, loc >= del.utf16.count {
                 client.insertText(ins, replacementRange: NSRange(location: loc - del.utf16.count, length: del.utf16.count))
             } else {
@@ -335,6 +329,7 @@ final class InputController: IMKInputController {
         hasMarked = false
         shown = ""
         caret = nil
+        guess = nil
         shadow = ""
         CandidateWindow.shared.hide()
     }
@@ -343,6 +338,7 @@ final class InputController: IMKInputController {
         super.activateServer(sender)
         state.forceHidden = state.defaults.bool(forKey: "ForceHidden")
         state.debug = state.defaults.bool(forKey: "DebugLog")
+        state.keyLog = state.defaults.bool(forKey: "KeyLog")
         let id = (sender as? IMKTextInput)?.bundleIdentifier()
         dbg("activate \(id ?? "?")")
         // Chromium deactivates and re-activates the input method right after the first key in a newly focused field:

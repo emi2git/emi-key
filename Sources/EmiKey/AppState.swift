@@ -16,6 +16,9 @@ final class AppState {
     /// `defaults write com.emi2git.inputmethod.EmiKey DebugLog -bool YES`: log cursor/text details (test only —
     /// they contain what is typed). Re-read when a text field gains focus.
     var debug = false
+    /// `KeyLog` (set by the e2e harness): one content-free line per key (handled / delete count / marked mode),
+    /// so the harness can tell Emi Key saw its keys. Off by default: nothing is logged per key.
+    var keyLog = false
 
     /// Apps whose reported cursor never moves; they get marked (underlined) text instead of in-place editing.
     /// Ghostty is known up front so the very first word there works too.

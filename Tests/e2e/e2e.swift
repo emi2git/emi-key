@@ -38,6 +38,17 @@ func fail(_ msg: String) -> Never { cleanupAll(); print("ERROR: \(msg)"); exit(2
 func pause(_ s: Double) { Thread.sleep(forTimeInterval: s) }
 signal(SIGINT) { _ in cleanupAll(); exit(130) }
 
+// Emi Key logs one content-free line per key ("key handled=… marked=…") only while KeyLog is set: turn it on for
+// this run (Emi Key re-reads it when a field gains focus) and restore the previous value at the end.
+do {
+    let had = run("/usr/bin/defaults", ["read", emiID, "KeyLog"])
+    run("/usr/bin/defaults", ["write", emiID, "KeyLog", "-bool", "YES"])
+    cleanups.append {
+        if had.status == 0 { run("/usr/bin/defaults", ["write", emiID, "KeyLog", "-bool", had.out == "1" ? "YES" : "NO"]) }
+        else { run("/usr/bin/defaults", ["delete", emiID, "KeyLog"]) }
+    }
+}
+
 // MARK: input sources
 func prop<T>(_ s: TISInputSource, _ k: CFString) -> T? {
     guard let p = TISGetInputSourceProperty(s, k) else { return nil }
@@ -567,7 +578,7 @@ let elapsed = Int(Date().timeIntervalSince(started)) + 2
 
 cleanupAll()
 
-// Did the IME actually see the keys? (InputController logs one content-free line per key.)
+// Did the IME actually see the keys? (With KeyLog, InputController logs one content-free line per key.)
 let logOut = run("/usr/bin/log", ["show", "--last", "\(elapsed)s", "--style", "compact", "--predicate", "subsystem == \"\(emiID)\""]).out
 let imeKeys = logOut.split(separator: "\n").filter { $0.contains("key handled=") }.count
 let markedKeys = logOut.split(separator: "\n").filter { $0.contains("key handled=") && $0.contains("marked=true") }.count
