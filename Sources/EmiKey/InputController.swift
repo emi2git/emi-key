@@ -39,7 +39,7 @@ final class InputController: IMKInputController {
     // MARK: keys
 
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
-        guard let event, event.type == .keyDown, let client = sender as? IMKTextInput else { return false }
+        guard state.ready, let event, event.type == .keyDown, let client = sender as? IMKTextInput else { return false }
         return process(event, client: client)
     }
 
@@ -69,6 +69,13 @@ final class InputController: IMKInputController {
             reset()
         }
         lastLoc = loc
+        // Cursor position was unknown after the last key (e.g. the word began at the very start of the field):
+        // make sure the word is still right before the cursor (a click elsewhere leaves it behind).
+        if caret == nil, !shown.isEmpty, !markedMode, !blind, let l = loc, l >= shown.utf16.count,
+           let before = client.attributedSubstring(from: NSRange(location: l - shown.utf16.count, length: shown.utf16.count))?.string,
+           before != shown {
+            reset()
+        }
         if shown.isEmpty && !hasMarked {
             // Right after a field gains focus Chromium may not have told macOS where the cursor is yet
             // (selectedRange = NotFound for the first key). That says nothing about the app: stay direct.
@@ -79,7 +86,7 @@ final class InputController: IMKInputController {
         var start = loc.map { $0 - shown.utf16.count }
         if markedMode, hasMarked, case let m = client.markedRange(), m.location != NSNotFound { start = m.location }
         let out = composer.handle(key, precedingText: precedingText(client, start))
-        log.notice("key handled=\(out.handled, privacy: .public) delete=\(self.composer.deleteCount, privacy: .public) marked=\(self.markedMode, privacy: .public)")
+        dbg("out handled=\(out.handled) delete=\(composer.deleteCount) marked=\(markedMode)")
         return apply(out, client: client, event: event, key: key)
     }
 
@@ -152,7 +159,7 @@ final class InputController: IMKInputController {
     @discardableResult
     private func apply(_ out: ComposerOutput, client: IMKTextInput, event: NSEvent? = nil, key: KeyInput? = nil) -> Bool {
         defer { updateCandidates(out.candidates, client: client) }
-        if markedMode { return applyMarked(out, client: client) }
+        if markedMode { return applyMarked(out, client: client, key: key) }
         let loc = cursor(client)
         let canRead = readable(client, loc) == true
         let n = composer.lastDeleteCount, nU16 = composer.lastDeleteUTF16Count
@@ -239,6 +246,13 @@ final class InputController: IMKInputController {
             // replace by range if we know the cursor, else just append.
             caret = nil
             dbg("unverified del=\(del ?? "nil") delCount=\(delCount) ins=\(ins) loc=\(loc.map(String.init) ?? "nil") canRead=\(canRead)")
+            if canRead {
+                // The app shows us its text and it is not our word: never delete what we cannot see is ours.
+                // Leave the document alone and forget the word; the key goes to the app.
+                _ = composer.flush()
+                shown = ""
+                return false
+            }
             if let del, let loc, loc >= del.utf16.count {
                 client.insertText(ins, replacementRange: NSRange(location: loc - del.utf16.count, length: del.utf16.count))
             } else {
@@ -250,8 +264,17 @@ final class InputController: IMKInputController {
     }
 
     /// Classic IMK composition (underlined) for apps where direct editing is impossible.
-    private func applyMarked(_ out: ComposerOutput, client: IMKTextInput) -> Bool {
+    private func applyMarked(_ out: ComposerOutput, client: IMKTextInput, key: KeyInput? = nil) -> Bool {
         let none = NSRange(location: NSNotFound, length: 0)
+        // Terminals (Ghostty …) treat a key that ended a composition as part of it and drop it, or send the
+        // committed text in its place: Enter would be lost. Send the key's own character with the text instead.
+        if !out.handled, !out.commit.isEmpty, state.isPty(client.bundleIdentifier()),
+           let k = key, let ch = k == .enter ? "\r" : k == .tab ? "\t" : nil {
+            client.insertText(out.commit + ch, replacementRange: none)
+            hasMarked = false
+            caret = nil
+            return true
+        }
         let nU16 = composer.lastDeleteUTF16Count
         if nU16 > 0 {
             // Esc flip of a committed word: only possible if the app lets us address it.

@@ -48,8 +48,17 @@ final class AppState {
         var s = ComposerSettings()
         s.traditional = defaults.bool(forKey: "traditional")
         s.toneStyle = defaults.string(forKey: "toneStyle") == "old" ? .old : .new
-        composer = Engines.composer(resources: resources, settings: s, learnedFile: learnedFile)
+        let pinyin = PinyinEngine(resources: resources), english = EnglishWords(resources: resources)
+        composer = Composer(telex: TelexEngine(), pinyin: pinyin, english: english, settings: s, learnedFile: learnedFile)
+        // Missing / unreadable dictionaries: without the English list every word would turn Vietnamese.
+        // Then Emi Key types nothing itself — every key goes straight to the app.
+        ready = pinyin.entryCount > 0 && english.count > 0
+        if !ready { log.error("dictionaries missing: pass-through only") }
+        log.notice("loaded in \(Int(pinyin.loadMillis), privacy: .public) ms")
     }
+
+    /// False when the bundled dictionaries could not be loaded: every key is passed to the app untouched.
+    let ready: Bool
 
     var traditional: Bool {
         get { composer.settings.traditional }
