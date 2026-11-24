@@ -1,0 +1,6 @@
+# Pass-through cases: valid with the stub engines AND the real ones.
+hello world	hello world
+Hello, World. 123	Hello, World. 123
+abcd⌫e	abce
+line1⏎line2	line1⏎line2
+class test git	class test git
