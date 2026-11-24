@@ -4,7 +4,7 @@ import Foundation
 /// Register / enable / select Emi Key without touching System Settings.
 ///   EmiKey --install   register this bundle, enable it, select it
 ///   EmiKey --select    select it (must already be enabled)
-///   EmiKey --disable   disable it
+///   EmiKey --disable   switch to a keyboard layout if Emi Key is selected, then disable it
 enum InputSources {
     static func sources(_ id: String = AppState.bundleID, all: Bool = true) -> [TISInputSource] {
         let filter = [kTISPropertyBundleID as String: id] as CFDictionary
@@ -25,6 +25,15 @@ enum InputSources {
         let list = sources()
         if list.isEmpty { print("Emi Key input source not found"); return 1 }
         var status: Int32 = 0
+        if args.contains("--disable") {
+            // Switch away first if Emi Key is the current input source, so typing keeps working right away.
+            let cur = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+            let curID: String = prop(cur, kTISPropertyBundleID) ?? ""
+            if curID == AppState.bundleID, let ascii = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue() {
+                let id: String = prop(ascii, kTISPropertyInputSourceID) ?? "?"
+                print("select \(id): \(TISSelectInputSource(ascii))")
+            }
+        }
         for s in list {
             let id: String = prop(s, kTISPropertyInputSourceID) ?? "?"
             if args.contains("--disable") {

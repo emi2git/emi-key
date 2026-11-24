@@ -1,54 +1,72 @@
 # Emi Key
 
-One macOS input method for English, Vietnamese (Telex) and Chinese (pinyin + tone numbers) — no switching. See [SPEC.md](SPEC.md).
+One macOS input method for English, Vietnamese (Telex) and Chinese (pinyin + tone numbers). No switching:
+just type. Version 1.0.0. Details: [SPEC.md](SPEC.md).
+
+## Typing
+
+| You type | You get | Rule |
+|---|---|---|
+| `hello world` | hello world | English stays as typed |
+| `tooi ddi hocj` | tôi đi học | Telex: `aa` â, `aw` ă, `ee` ê, `oo` ô, `ow` ơ, `uw`/`w` ư, `dd` đ |
+| `vieetj`, `vietje` | việt | tones `s f r x j` (sắc huyền hỏi ngã nặng) anywhere after the vowel, `z` removes |
+| `ass`, `class`, `git` | as, class, git | double key undoes; not a Vietnamese syllable → left alone |
+| `I take the bus` / `cho con bus` | bus / bú | English-or-Vietnamese words follow the words before them |
+| `ma3` | candidate bar `1 马 2 码 …` | a tone digit 1–4 (5/0 = neutral) after pinyin starts Chinese |
+| `ma3` `2` | 码 | a digit right after the tone digit picks; Space picks the first |
+| `ni3hao`, `xiao4yang2shangshan` | 你好, 小羊上山 | untoned syllables match any tone |
+| `mp3`, `iphone15`, `2026` | mp3, iphone15, 2026 | digits after non-pinyin stay digits |
+
+- **Esc** right after a word flips it between raw letters and Vietnamese (`the bus ⎋` → the bú). While composing
+  Chinese, Esc keeps the raw pinyin.
+- **Enter**, Tab, arrows and ⌘/⌃/⌥ shortcuts keep the word exactly as shown and always reach the app on the first press.
+- Clicking or moving the cursor mid-word just leaves the word as it is.
+- Text is inserted directly (no underline), except in apps that hide their text from input methods.
+
+## Menu (input menu, C2 icon)
+
+- **Traditional Chinese** — 馬 instead of 马.
+- **Old tone style (hòa)** — hòa / thúy instead of hoà / thuý.
 
 ## Install
 
 ```sh
-./build.sh
+./build.sh            # build, sign, install to ~/Library/Input Methods, enable + select
+./build.sh --force    # reinstall even if nothing changed
 ```
 
-Builds a release, assembles `build/Emi Key.app`, signs it, installs it to `~/Library/Input Methods/Emi Key.app`,
-restarts the old process and registers + enables + selects it (Carbon TIS, via `EmiKey --install`).
-No System Settings visit needed; once enabled it stays in the input menu after a reboot.
+If the installed copy is already this build, `build.sh` does nothing (it never restarts Emi Key needlessly).
 
-`EmiKey --select` / `--disable` select or disable it from the command line.
-
-## Use
-
-- `ma3` → candidate bar `1 马 2 码 …`, `1`–`9` picks, Space takes the first, Enter keeps the letters (and is passed on), Esc cancels.
-- `vieetj` → việt, `tooi ddi` → tôi đi; Esc right after a word flips raw ↔ Vietnamese.
-- Everything else stays English.
-- Typing is inserted directly (no underline while composing).
-- Input menu: Traditional Chinese, Old tone style (hòa). That's all — no windows.
-- Settings: defaults domain `com.emi2git.inputmethod.EmiKey`. Learned words: `~/Documents/Emi Key/learned.json`.
-
-## Test
+## Uninstall
 
 ```sh
-swift test                                   # engine unit tests
-swift Tests/e2e/e2e.swift                    # real key events into TextEdit (pass-through cases)
-swift Tests/e2e/e2e.swift Tests/e2e/cases-full.txt   # Telex / pinyin cases (TextEdit)
-swift Tests/e2e/e2e.swift --app chrome --field omnibox Tests/e2e/cases-full.txt
+scripts/uninstall.sh           # switch to your keyboard layout, disable, remove the app and settings
+scripts/uninstall.sh --purge   # also delete learned words (~/Documents/Emi Key)
 ```
 
-`--app textedit|chrome|chrome-user|safari|notes|terminal|ghostty|ghostty-user`, `--field textarea|input|omnibox` (browsers).
-`chrome` runs a separate Chrome with a throw-away profile; `chrome-user` uses your running Chrome (new window).
-Terminals get a new window running `cat > file` (Ghostty: a separate instance). Every window/note/file the harness creates is closed or deleted,
-settings it changes are restored, and it stops typing the moment you press a key or focus leaves its window.
+## Troubleshooting
 
-**After reinstalling Emi Key, quit and reopen Chrome (and Chromium/Electron apps, Ghostty).** Chrome keeps its connection to
-the old Emi Key process and never reconnects, so it silently types plain letters until relaunched.
+- **After installing an update, quit and reopen Chrome, Electron apps (VS Code, Slack, …) and Ghostty.**
+  They keep a connection to the old Emi Key process and type plain letters until relaunched.
+- Plain letters everywhere: check that Emi Key is selected in the input menu; reinstall with `./build.sh --force`.
+- Password fields: macOS turns input methods off there, so you type plain letters — that is expected.
+- A terminal that loses keys or shows underlined text: `defaults write com.emi2git.inputmethod.EmiKey PtyApps -array-add <bundle id>`.
 
-The e2e harness needs Accessibility and Automation → TextEdit for the terminal running it.
-`defaults write com.emi2git.inputmethod.EmiKey ForceHidden -bool YES` makes Emi Key treat every app as one that hides its
-text (marked-text fallback) so the e2e cases cover that path too; `defaults delete … ForceHidden` to undo.
+## Privacy
 
-It waits until you stop typing, retries a case if you typed during it, and restores your input source.
+Everything runs offline; Emi Key has no network code. Nothing you type is logged. The only file it writes is
+`~/Documents/Emi Key/learned.json`: the words you flipped with Esc and how often (at most 1000 words), used only
+when there is no text around to tell the language.
+`defaults write com.emi2git.inputmethod.EmiKey DebugLog -bool YES` logs per-key details **including what you type**
+to the system log — for debugging only, off by default; `defaults delete com.emi2git.inputmethod.EmiKey DebugLog` to undo.
 
-## Icons
+## Development
 
-`swift scripts/make-icons.swift` regenerates `Resources/AppIcon.icns` and `Resources/MenuIconTemplate.tiff` (C2 brush strokes).
+```sh
+swift test                                                    # unit tests (+ per-key latency benchmark)
+swift Tests/e2e/e2e.swift --app textedit Tests/e2e/cases-full.txt   # real keystrokes; --app chrome|safari|notes|terminal|ghostty
+```
 
-`defaults write com.emi2git.inputmethod.EmiKey DebugLog -bool YES` logs cursor/text details per key (contains what you
-type — test only; `defaults delete … DebugLog`).
+The e2e harness only types into windows it creates, stops when you type or focus leaves, and cleans up after itself.
+It needs Accessibility + Automation permission for the terminal running it. `defaults write … ForceHidden -bool YES`
+forces the underlined (marked-text) path for testing. Icons: `swift scripts/make-icons.swift`.

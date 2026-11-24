@@ -4,36 +4,38 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Emi Key</string>
 	<key>CFBundleExecutable</key>
 	<string>EmiKey</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.emi2git.inputmethod.EmiKey</string>
 	<key>CFBundleName</key>
 	<string>Emi Key</string>
-	<key>CFBundleDisplayName</key>
-	<string>Emi Key</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1</string>
+	<string>1.0.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<key>CFBundleIconFile</key>
-	<string>AppIcon</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
-	<key>LSBackgroundOnly</key>
-	<true/>
-	<key>LSUIElement</key>
-	<true/>
-	<key>NSPrincipalClass</key>
-	<string>NSApplication</string>
-	<key>NSHumanReadableCopyright</key>
-	<string>© 2026 Emi</string>
 	<key>InputMethodConnectionName</key>
 	<string>com.emi2git.inputmethod.EmiKey_Connection</string>
 	<key>InputMethodServerControllerClass</key>
 	<string>EmiKeyInputController</string>
+	<key>LSBackgroundOnly</key>
+	<true/>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Emi</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>TISIconIsTemplate</key>
+	<true/>
 	<key>TISInputSourceID</key>
 	<string>com.emi2git.inputmethod.EmiKey</string>
 	<key>TISIntendedLanguage</key>
@@ -46,7 +48,5 @@
 	</array>
 	<key>tsInputMethodIconFileKey</key>
 	<string>MenuIconTemplate.tiff</string>
-	<key>TISIconIsTemplate</key>
-	<true/>
 </dict>
 </plist>

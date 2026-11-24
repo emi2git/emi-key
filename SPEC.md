@@ -16,6 +16,8 @@ One macOS input method for English, Vietnamese and Mandarin with no switching.
     what it typed; Backspace/Esc go straight to the shell, a backward cursor jump ends the word.
   - Ghostty: ignores replacement ranges → an edit is sent as DEL × n + the new text (like typing it).
   - Apps whose cursor never moves (auto-detected, `UntrackedApps`) → marked text.
+  - Marked text in terminals (`PtyApps`, Ghostty): Enter/Tab are sent together with the committed word (terminals drop a
+    key that ends a composition).
   - After reinstalling Emi Key, Chrome/Electron apps and Ghostty that were already open must be relaunched once
     (they keep the dead connection to the old process).
 - Offline. No network. Learned data in `~/Documents/Emi Key/` (learned.json).
@@ -62,4 +64,8 @@ One macOS input method for English, Vietnamese and Mandarin with no switching.
 - `Tests/EmiKeyCoreTests/` — unit tests (`swift test`).
 - `Tests/e2e/` — types real keystrokes into TextEdit, Chrome (page + address bar), Safari, Notes, Terminal, Ghostty with
   Emi Key selected and checks the text (`--app`, `--field`); leaves no windows, notes, files or settings behind.
-- `build.sh` — build, sign, install to `~/Library/Input Methods`, restart the input method.
+- `build.sh` — build, sign, install to `~/Library/Input Methods`, restart the input method (skipped when the installed
+  build is identical: a restart breaks already-open Chrome/Electron/Ghostty until relaunched).
+- `scripts/uninstall.sh [--purge]` — disable, remove app + settings (+ learned words).
+- Resilience: missing dictionaries → pure pass-through; unreadable learned.json → ignored and rewritten (atomic, ≤ 1000 words).
+- Privacy: no network; nothing typed is logged unless `DebugLog` is set.
