@@ -5,34 +5,20 @@ import os
 
 let log = Logger(subsystem: AppState.bundleID, category: "input")
 
-/// Tags on CGEvents we synthesise ourselves, so we recognise them when they come back through the IME.
-enum Synth {
-    static let backspaceTag: Int64 = 0x456D_694B_0001   // "EmiK" + 1: let the app delete
-    static let markerTag: Int64 = 0x456D_694B_0002      // after the backspaces: insert the pending commit
-    static let markerKeyCode: CGKeyCode = 90             // F20, produces no text
-
-    static func post(backspaces n: Int) {
-        let src = CGEventSource(stateID: .privateState)
-        func send(_ code: CGKeyCode, tag: Int64) {
-            for down in [true, false] {
-                guard let e = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: down) else { continue }
-                e.flags = []
-                e.setIntegerValueField(.eventSourceUserData, value: tag)
-                e.post(tap: .cghidEventTap)
-            }
-        }
-        for _ in 0..<n { send(51, tag: backspaceTag) }
-        send(markerKeyCode, tag: markerTag)
-    }
-}
-
+/// Direct insertion (like EVKey/OpenKey): the word being composed is real text in the document, never marked
+/// (underlined) text. Each composer output becomes the minimal edit from what is shown to the new text.
 @objc(EmiKeyInputController)
 final class InputController: IMKInputController {
     private var state: AppState { .shared }
     private var composer: Composer { AppState.shared.composer }
+    /// The in-progress word as it currently stands in the document, just before the cursor.
+    private var shown = ""
+    /// Where the cursor should be after our last edit (nil = unknown, or the app hides its text).
+    private var caret: Int?
+    /// Marked-text mode for the current word: the app hides its text, so we could not replace what we inserted.
+    /// Then (and only then) the word is shown as classic marked text.
+    private var markedMode = false
     private var hasMarked = false
-    /// Output waiting for our synthesised backspaces to be processed (fallback path).
-    private var pending: ComposerOutput?
 
     override func recognizedEvents(_ sender: Any!) -> Int {
         Int(NSEvent.EventTypeMask.keyDown.rawValue)
@@ -42,21 +28,23 @@ final class InputController: IMKInputController {
 
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
         guard let event, event.type == .keyDown, let client = sender as? IMKTextInput else { return false }
-        if let cg = event.cgEvent {
-            switch cg.getIntegerValueField(.eventSourceUserData) {
-            case Synth.backspaceTag: return false
-            case Synth.markerTag:
-                if let out = pending { pending = nil; apply(out, deleteCount: 0, client: client) }
-                return true
-            default: break
-            }
-        }
+        return process(event, client: client)
+    }
+
+    private func process(_ event: NSEvent, client: IMKTextInput) -> Bool {
         let key = Self.keyInput(event)
-        let out = composer.handle(key, precedingText: precedingText(client))
-        let n = composer.deleteCount
-        log.notice("key handled=\(out.handled, privacy: .public) delete=\(n, privacy: .public)")
-        apply(out, deleteCount: n, client: client)
-        return out.handled
+        let sel = client.selectedRange()
+        let loc: Int? = sel.location == NSNotFound ? nil : sel.location
+        // Cursor moved / clicked elsewhere / selection: the shown text simply stays; forget the word.
+        if let c = caret, loc != c || sel.length != 0 { reset() }
+        if shown.isEmpty && !hasMarked {
+            markedMode = readable(client, loc) == false
+        }
+        var start = loc.map { $0 - shown.utf16.count }
+        if markedMode, hasMarked, case let m = client.markedRange(), m.location != NSNotFound { start = m.location }
+        let out = composer.handle(key, precedingText: precedingText(client, start))
+        log.notice("key handled=\(out.handled, privacy: .public) delete=\(self.composer.deleteCount, privacy: .public) marked=\(self.markedMode, privacy: .public)")
+        return apply(out, client: client, event: event, key: key)
     }
 
     static func keyInput(_ e: NSEvent) -> KeyInput {
@@ -75,127 +63,189 @@ final class InputController: IMKInputController {
         return .char(c)
     }
 
-    /// Up to 200 characters before the composition (or cursor). nil when the app does not expose its text.
-    private func precedingText(_ client: IMKTextInput) -> String? {
-        guard let loc = compositionStart(client) else { return nil }
-        if loc == 0 { return "" }
-        let start = max(0, loc - 200)
-        return client.attributedSubstring(from: NSRange(location: start, length: loc - start))?.string
+    /// Up to 200 characters before `start` (the start of the shown word). nil when the app does not expose its text.
+    private func precedingText(_ client: IMKTextInput, _ start: Int?) -> String? {
+        guard let start, start >= 0, !state.forceHidden else { return nil }
+        if start == 0 { return "" }
+        let from = max(0, start - 200)
+        return client.attributedSubstring(from: NSRange(location: from, length: start - from))?.string
     }
 
-    private func compositionStart(_ client: IMKTextInput) -> Int? {
-        let m = client.markedRange()
-        if hasMarked, m.location != NSNotFound, m.length > 0 { return m.location }
-        let s = client.selectedRange()
-        return s.location == NSNotFound ? nil : s.location
+    /// Does the app let us read its text around `loc`? (nil = cannot tell, e.g. at the very start.)
+    private func readable(_ client: IMKTextInput, _ loc: Int?) -> Bool? {
+        guard let loc, !state.forceHidden else { return false }
+        if loc == 0 { return nil }
+        return client.attributedSubstring(from: NSRange(location: loc - 1, length: 1)) != nil
     }
 
     // MARK: output
 
-    private func apply(_ out: ComposerOutput, deleteCount n: Int, client: IMKTextInput) {
+    /// Turns a composer output into an edit of the document. Returns whether the key was consumed.
+    @discardableResult
+    private func apply(_ out: ComposerOutput, client: IMKTextInput, event: NSEvent? = nil, key: KeyInput? = nil) -> Bool {
         defer { updateCandidates(out.candidates, client: client) }
+        if markedMode { return applyMarked(out, client: client) }
+        let sel = client.selectedRange()
+        let loc: Int? = sel.location == NSNotFound ? nil : sel.location
+        let canRead = readable(client, loc) == true
+        let n = composer.lastDeleteCount, nU16 = composer.lastDeleteUTF16Count
+        let target = out.commit + out.marked
+
+        // Old text being replaced: `n` committed characters (Esc flip) + the shown word. nil = unknown.
+        var old: String? = shown
         if n > 0 {
-            if let loc = compositionStart(client), loc >= n,
-               let before = client.attributedSubstring(from: NSRange(location: loc - n, length: n)), before.length == n {
-                let markedLen = hasMarked ? max(0, client.markedRange().length) : 0
-                client.insertText(out.commit, replacementRange: NSRange(location: loc - n, length: n + markedLen))
-                hasMarked = false
-                setMarked(out.marked, client: client)
-            } else {
-                // App hides its text: clear our marked text, let it delete via real backspaces, then finish.
-                setMarked("", client: client)
-                pending = ComposerOutput(commit: out.commit, marked: out.marked, candidates: out.candidates, handled: out.handled)
-                Synth.post(backspaces: composer.lastDeleteCount)
+            old = nil
+            if canRead, let loc, case let s = loc - shown.utf16.count - nU16, s >= 0,
+               let d = client.attributedSubstring(from: NSRange(location: s, length: nU16))?.string, d.utf16.count == nU16 {
+                old = d + shown
             }
-            return
         }
-        if !out.commit.isEmpty {
-            client.insertText(out.commit, replacementRange: NSRange(location: NSNotFound, length: 0))
-            hasMarked = false
+        let common = old.map { Self.commonPrefix($0, target) } ?? 0
+        let del = old.map { String($0.dropFirst(common)) }         // nil: unknown text, n + shown chars
+        let delCount = del?.count ?? (n + shown.count)
+        let ins = String(target.dropFirst(common))
+        let newShown = out.marked
+        func expect(_ c: Int?) { caret = canRead && out.handled ? c : nil }
+
+        // Let the app handle the key natively when that gives exactly the new text (autocorrect, key repeat).
+        if let event, let key {
+            let chars = event.characters ?? ""
+            var pass = false, caretAfter: Int? = nil
+            var textKey = key == .space
+            if case .char = key { textKey = true }
+            if out.handled, textKey, delCount == 0, !ins.isEmpty, ins == chars {
+                pass = true; caretAfter = loc.map { $0 + chars.utf16.count }
+            } else if out.handled, key == .backspace, ins.isEmpty, delCount == 1, let del {
+                pass = true; caretAfter = loc.map { $0 - del.utf16.count }
+            } else if !out.handled, delCount == 0, ins.isEmpty {
+                pass = true
+            }
+            if pass {
+                shown = newShown
+                if out.handled { expect(caretAfter) } else { caret = nil }
+                return false
+            }
         }
-        setMarked(out.marked, client: client)
+
+        let none = NSRange(location: NSNotFound, length: 0)
+        if delCount == 0 {
+            if !ins.isEmpty { client.insertText(ins, replacementRange: none) }
+            expect(loc.map { $0 + ins.utf16.count })
+        } else if let del, let loc, canRead, loc >= del.utf16.count,
+                  case let r = NSRange(location: loc - del.utf16.count, length: del.utf16.count),
+                  client.attributedSubstring(from: r)?.string == del {
+            client.insertText(ins, replacementRange: r)
+            expect(r.location + ins.utf16.count)
+        } else {
+            // Could not verify the text (rare: word started where the app's text was unreadable). Best effort:
+            // replace by range if we know the cursor, else just append.
+            caret = nil
+            if let del, let loc, loc >= del.utf16.count {
+                client.insertText(ins, replacementRange: NSRange(location: loc - del.utf16.count, length: del.utf16.count))
+            } else {
+                client.insertText(ins, replacementRange: none)
+            }
+        }
+        shown = newShown
+        return out.handled
     }
 
-    private func setMarked(_ text: String, client: IMKTextInput) {
-        if text.isEmpty && !hasMarked { return }
-        let attrs: [NSAttributedString.Key: Any] = [.underlineStyle: NSUnderlineStyle.single.rawValue,
-                                                    .markedClauseSegment: 0]
-        let s = NSAttributedString(string: text, attributes: attrs)
-        client.setMarkedText(s, selectionRange: NSRange(location: (text as NSString).length, length: 0),
-                             replacementRange: NSRange(location: NSNotFound, length: 0))
-        hasMarked = !text.isEmpty
+    /// Classic IMK composition (underlined) for apps where direct editing is impossible.
+    private func applyMarked(_ out: ComposerOutput, client: IMKTextInput) -> Bool {
+        let none = NSRange(location: NSNotFound, length: 0)
+        let nU16 = composer.lastDeleteUTF16Count
+        if nU16 > 0 {
+            // Esc flip of a committed word: only possible if the app lets us address it.
+            let m = client.markedRange(), sel = client.selectedRange()
+            let loc = hasMarked && m.location != NSNotFound ? m.location : sel.location
+            guard loc != NSNotFound, loc >= nU16 else { return out.handled }
+            client.insertText(out.commit, replacementRange: NSRange(location: loc - nU16, length: nU16 + (hasMarked ? m.length : 0)))
+            hasMarked = false
+        } else if !out.commit.isEmpty {
+            client.insertText(out.commit, replacementRange: none)
+            hasMarked = false
+        }
+        if !out.marked.isEmpty || hasMarked {
+            let a = NSAttributedString(string: out.marked, attributes: [.underlineStyle: NSUnderlineStyle.single.rawValue, .markedClauseSegment: 0])
+            client.setMarkedText(a, selectionRange: NSRange(location: (out.marked as NSString).length, length: 0), replacementRange: none)
+            hasMarked = !out.marked.isEmpty
+        }
+        caret = nil
+        return out.handled
+    }
+
+    /// Common prefix length in Characters.
+    static func commonPrefix(_ a: String, _ b: String) -> Int {
+        var n = 0
+        for (x, y) in zip(a, b) { if x != y { break }; n += 1 }
+        return n
     }
 
     private func updateCandidates(_ cands: [String], client: IMKTextInput) {
         guard !cands.isEmpty else { CandidateWindow.shared.hide(); return }
+        // Bar sits under the start of the in-progress word (it is plain text now, not marked text).
+        let sel = client.selectedRange()
+        let start = sel.location == NSNotFound ? 0 : max(0, sel.location - shown.utf16.count)
+        // Caret line rect (reliable height), moved left to the word's first character.
         var rect = NSRect.zero
         _ = client.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)
+        var actual = NSRange()
+        let first = client.firstRect(forCharacterRange: NSRange(location: start, length: shown.isEmpty ? 0 : 1), actualRange: &actual)
+        if first != .zero, first.minX <= rect.minX, rect.minX - first.minX < 2000 { rect.origin.x = first.minX }
         CandidateWindow.shared.onPick = { [weak self] i in self?.pick(i) }
         CandidateWindow.shared.show(cands, under: rect)
     }
 
     private func pick(_ i: Int) {
         guard let client = client() else { return }
-        apply(composer.pick(i), deleteCount: composer.deleteCount, client: client)
+        apply(composer.pick(i), client: client)
     }
 
     // MARK: lifecycle
 
-    private func flush(_ sender: Any?) {
+    /// Forget the word being composed. Its text is already in the document, so nothing is inserted
+    /// (except in marked-text mode, where the marked word is committed as it stands).
+    private func reset(_ sender: Any? = nil) {
         let text = composer.flush()
-        let client = (sender as? IMKTextInput) ?? client()
-        if let client {
-            if !text.isEmpty {
-                client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
-                hasMarked = false
-            } else {
-                setMarked("", client: client)
-            }
+        if hasMarked, let client = (sender as? IMKTextInput) ?? client() {
+            client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
         }
         hasMarked = false
+        shown = ""
+        caret = nil
         CandidateWindow.shared.hide()
     }
 
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
-        _ = composer.flush()      // new focus: start clean
-        hasMarked = false
+        state.forceHidden = state.defaults.bool(forKey: "ForceHidden")
+        reset()
     }
 
     override func deactivateServer(_ sender: Any!) {
-        flush(sender)
+        reset(sender)
         super.deactivateServer(sender)
     }
 
     override func commitComposition(_ sender: Any!) {
-        flush(sender)
+        reset(sender)
     }
 
     // MARK: menu
 
     override func menu() -> NSMenu! {
         let m = NSMenu(title: "Emi Key")
-        func add(_ title: String, _ sel: Selector, on: Bool? = nil) {
+        func add(_ title: String, _ sel: Selector, on: Bool) {
             let it = NSMenuItem(title: title, action: sel, keyEquivalent: "")
             it.target = self
-            if let on { it.state = on ? .on : .off }
+            it.state = on ? .on : .off
             m.addItem(it)
         }
         add("Traditional Chinese", #selector(toggleTraditional(_:)), on: state.traditional)
-        m.addItem(.separator())
-        add("Vietnamese tone style: New (hoà)", #selector(toneNew(_:)), on: state.toneStyle == .new)
-        add("Vietnamese tone style: Old (hòa)", #selector(toneOld(_:)), on: state.toneStyle == .old)
-        m.addItem(.separator())
-        add("Settings…", #selector(showSettings(_:)))
-        add("Help", #selector(showHelp(_:)))
-        add("About Emi Key", #selector(showAbout(_:)))
+        add("Old tone style (hòa)", #selector(toggleOldTone(_:)), on: state.toneStyle == .old)
         return m
     }
 
     @objc func toggleTraditional(_ sender: Any?) { state.traditional.toggle() }
-    @objc func toneNew(_ sender: Any?) { state.toneStyle = .new }
-    @objc func toneOld(_ sender: Any?) { state.toneStyle = .old }
-    @objc func showSettings(_ sender: Any?) { Windows.showSettings() }
-    @objc func showHelp(_ sender: Any?) { Windows.showHelp() }
-    @objc func showAbout(_ sender: Any?) { Windows.showAbout() }
+    @objc func toggleOldTone(_ sender: Any?) { state.toneStyle = state.toneStyle == .old ? .new : .old }
 }

@@ -46,7 +46,7 @@ public enum KeyInput: Equatable, Sendable {
 
 public struct ComposerOutput: Equatable, Sendable {
     public var commit: String = ""        // text to insert for good
-    public var marked: String = ""        // in-progress text shown underlined
+    public var marked: String = ""        // in-progress word (the app shows it as plain text)
     public var candidates: [String] = []  // Chinese candidate bar (empty = hide)
     public var handled: Bool = true       // false = let the app receive the key itself (after `commit`)
     public init(commit: String = "", marked: String = "", candidates: [String] = [], handled: Bool = true) {

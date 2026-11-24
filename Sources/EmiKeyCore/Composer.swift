@@ -66,8 +66,9 @@ public final class Composer {
             return commitLatin(sep: " ")
 
         case .enter:
+            // Enter is always the user's own Enter: finish the word as shown and pass the key on.
             if buffer.isEmpty { return ComposerOutput(handled: false) }
-            if chinese { return finish(commit: buffer) }
+            if chinese { var o = finish(commit: buffer); o.handled = false; return o }
             var o = commitLatin(sep: "")
             flippable = nil
             o.handled = false
@@ -107,6 +108,9 @@ public final class Composer {
             return o
         }
     }
+
+    /// True while a word is being composed or the last committed word may still be flipped with Esc.
+    public var isActive: Bool { !buffer.isEmpty || flippable != nil }
 
     /// Pick candidate index (0-based) by mouse click in the candidate bar.
     public func pick(_ index: Int) -> ComposerOutput {

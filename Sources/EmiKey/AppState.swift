@@ -6,11 +6,13 @@ import EmiKeyCore
 final class AppState {
     static let shared = AppState()
     static let bundleID = "com.emi2git.inputmethod.EmiKey"
-    static let settingsChanged = Notification.Name("EmiKeySettingsChanged")
 
     let defaults: UserDefaults
     let composer: Composer
     let learnedFile: URL
+    /// Test hook (`defaults write com.emi2git.inputmethod.EmiKey ForceHidden -bool YES`): treat every app as one
+    /// that hides its text, to exercise the marked-text fallback. Re-read when a text field gains focus.
+    var forceHidden = false
 
     private init() {
         // A suite named after our own bundle id is our standard domain (UserDefaults refuses that name as a suite).
@@ -27,11 +29,10 @@ final class AppState {
 
     var traditional: Bool {
         get { composer.settings.traditional }
-        set { composer.settings.traditional = newValue; defaults.set(newValue, forKey: "traditional"); changed() }
+        set { composer.settings.traditional = newValue; defaults.set(newValue, forKey: "traditional") }
     }
     var toneStyle: ToneStyle {
         get { composer.settings.toneStyle }
-        set { composer.settings.toneStyle = newValue; defaults.set(newValue == .old ? "old" : "new", forKey: "toneStyle"); changed() }
+        set { composer.settings.toneStyle = newValue; defaults.set(newValue == .old ? "old" : "new", forKey: "toneStyle") }
     }
-    private func changed() { NotificationCenter.default.post(name: Self.settingsChanged, object: nil) }
 }

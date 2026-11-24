@@ -115,6 +115,24 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(type("ddd "), "dd ")
     }
 
+    func testEnterAlwaysPassedOn() {
+        XCTAssertFalse(out("hello\n").handled)
+        XCTAssertFalse(out("ni3hao\n").handled)
+        XCTAssertEqual(out("ni3hao\n").commit, "ni3hao")
+        XCTAssertEqual(out("ni3hao\n").candidates, [])
+        XCTAssertEqual(type("ni3hao\n"), "ni3hao\n")
+        XCTAssertEqual(type("hello\nworld "), "hello\nworld ")
+    }
+
+    func testIsActive() {
+        let c = make()
+        XCTAssertFalse(c.isActive)
+        _ = c.handle(.char("b"), precedingText: nil)
+        XCTAssertTrue(c.isActive)
+        _ = c.flush()
+        XCTAssertFalse(c.isActive)
+    }
+
     func testMarkedText() {
         XCTAssertEqual(out("vieetj").marked, "việt")
         XCTAssertEqual(out("bu").marked, "bu")
@@ -199,7 +217,7 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(type("nihao3 "), "你好")
         XCTAssertEqual(type("ni3hao3 "), "你好")
         XCTAssertEqual(type("ni3hao "), "你好")
-        XCTAssertEqual(type("ma3\n"), "ma3")
+        XCTAssertEqual(type("ma3\n"), "ma3\n")   // Enter always reaches the app
         XCTAssertEqual(type("ma3⎋"), "ma3")
         XCTAssertEqual(type("ma "), "ma ")
         XCTAssertEqual(type("ma3,"), "马,")
