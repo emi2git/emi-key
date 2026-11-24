@@ -20,13 +20,23 @@ final class AppState {
     /// Apps whose reported cursor never moves; they get marked (underlined) text instead of in-place editing.
     /// Ghostty is known up front so the very first word there works too.
     private lazy var untracked: Set<String> = Set(defaults.stringArray(forKey: "UntrackedApps") ?? [])
-        .union(["com.mitchellh.ghostty"])
-    func isUntracked(_ id: String?) -> Bool { id.map { untracked.contains($0) } ?? false }
+
+    func isUntracked(_ id: String?) -> Bool { id.map { untracked.contains($0) && !blind.contains($0) } ?? false }
     func markUntracked(_ id: String?) {
-        guard let id, !untracked.contains(id) else { return }
+        guard let id, !untracked.contains(id), !blind.contains(id) else { return }
         untracked.insert(id)
         defaults.set(Array(untracked), forKey: "UntrackedApps")
     }
+
+    /// Apps that apply in-place edits correctly but report a cursor/text that drifts from what is on screen
+    /// (Terminal.app: its text is the screen grid). Emi Key edits them directly, trusting its own record of
+    /// what it typed (cursor + recent text) instead of what the app reports. `defaults … BlindApps` adds more.
+    private lazy var blind: Set<String> = Set(defaults.stringArray(forKey: "BlindApps") ?? []).union(["com.apple.Terminal"]).union(pty)
+    func isBlind(_ id: String?) -> Bool { id.map { blind.contains($0) } ?? false }
+    /// Terminals that ignore replacement ranges (Ghostty): an edit is sent as DEL characters + the new text,
+    /// exactly what typing Backspace and the letters would send to the shell.
+    private lazy var pty: Set<String> = Set(defaults.stringArray(forKey: "PtyApps") ?? []).union(["com.mitchellh.ghostty"])
+    func isPty(_ id: String?) -> Bool { id.map { pty.contains($0) } ?? false }
 
     private init() {
         // A suite named after our own bundle id is our standard domain (UserDefaults refuses that name as a suite).

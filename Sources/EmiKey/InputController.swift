@@ -20,6 +20,11 @@ final class InputController: IMKInputController {
     /// Then (and only then) the word is shown as classic marked text.
     private var markedMode = false
     private var hasMarked = false
+    /// "Blind" app (see AppState.isBlind): trust `caret` and `shadow` over what the app reports.
+    private var blind = false
+    /// Blind apps: the text Emi Key knows is just before `caret` (what it typed since tracking began).
+    private var shadow = ""
+    private var lastReported: Int?
     /// No key handled yet since the text field gained focus.
     private var freshField = true
 
@@ -45,7 +50,15 @@ final class InputController: IMKInputController {
             let around = sel.location == NSNotFound ? nil : client.attributedSubstring(from: NSRange(location: max(0, sel.location - 12), length: min(12, sel.location)))?.string
             log.notice("dbg key=\(String(describing: key), privacy: .public) app=\(client.bundleIdentifier() ?? "?", privacy: .public) sel=\(sel.location, privacy: .public),\(sel.length, privacy: .public) caret=\(self.caret.map(String.init) ?? "nil", privacy: .public) shown=\(self.shown, privacy: .public) before=\(around ?? "<nil>", privacy: .public) marked=\(client.markedRange().location, privacy: .public)")
         }
-        let loc: Int? = sel.location == NSNotFound ? nil : sel.location
+        blind = state.isBlind(client.bundleIdentifier()) && !state.forceHidden
+        if blind {
+            // Terminal.app handles Backspace/Esc itself (they never reach us) while nothing is marked. Its cursor
+            // drifts forward on some letters but only goes back when text was deleted: then forget the word.
+            let r = sel.location == NSNotFound ? nil : sel.location
+            if caret != nil, let r, let last = lastReported, r < last { reset() }
+            lastReported = r
+        }
+        let loc = cursor(client)
         // Cursor moved / clicked elsewhere / selection: the shown text simply stays; forget the word.
         // A selection that starts right at our cursor is the app's inline autocomplete (Chrome's address bar,
         // Spotlight, search fields): the word is still ours.
@@ -86,17 +99,47 @@ final class InputController: IMKInputController {
         return .char(c)
     }
 
+    /// Replace `r` (just before the cursor) by `s`. Pty apps get DEL × length + text instead.
+    private func edit(_ client: IMKTextInput, _ s: String, _ r: NSRange, deleting: String?) {
+        if state.isPty(client.bundleIdentifier()) {
+            let n = deleting?.count ?? 0
+            client.insertText(String(repeating: "\u{7F}", count: n) + s, replacementRange: NSRange(location: NSNotFound, length: 0))
+        } else {
+            client.insertText(s, replacementRange: r)
+        }
+    }
+
+    /// Where the cursor is: the app's answer, or for blind apps our own record once we have one.
+    private func cursor(_ client: IMKTextInput) -> Int? {
+        if blind, let c = caret { return c }
+        let l = client.selectedRange().location
+        if blind, caret == nil { shadow = "" }
+        return l == NSNotFound ? nil : l
+    }
+
+    /// Text in `r`. Blind apps: only what we typed (the shadow, which ends at `caret`), clipped to it.
+    private func text(_ client: IMKTextInput, _ r: NSRange) -> String? {
+        guard blind else { return client.attributedSubstring(from: r)?.string }
+        guard let c = caret ?? cursor(client) else { return nil }
+        let u = Array(shadow.utf16), from = c - u.count
+        let lo = max(r.location, from), hi = min(r.location + r.length, c)
+        if r.length == 0 || r.location + r.length > c { return r.length == 0 ? "" : nil }
+        if lo >= hi { return "" }
+        return String(decoding: u[(lo - from)..<(hi - from)], as: UTF16.self)
+    }
+
     /// Up to 200 characters before `start` (the start of the shown word). nil when the app does not expose its text.
     private func precedingText(_ client: IMKTextInput, _ start: Int?) -> String? {
         guard let start, start >= 0, !state.forceHidden else { return nil }
         if start == 0 { return "" }
         let from = max(0, start - 200)
-        return client.attributedSubstring(from: NSRange(location: from, length: start - from))?.string
+        return text(client, NSRange(location: from, length: start - from))
     }
 
     /// Does the app let us read its text around `loc`? (nil = cannot tell, e.g. at the very start.)
     private func readable(_ client: IMKTextInput, _ loc: Int?) -> Bool? {
         guard let loc, !state.forceHidden else { return false }
+        if blind { return true }
         if loc == 0 { return nil }
         return client.attributedSubstring(from: NSRange(location: loc - 1, length: 1)) != nil
     }
@@ -108,8 +151,7 @@ final class InputController: IMKInputController {
     private func apply(_ out: ComposerOutput, client: IMKTextInput, event: NSEvent? = nil, key: KeyInput? = nil) -> Bool {
         defer { updateCandidates(out.candidates, client: client) }
         if markedMode { return applyMarked(out, client: client) }
-        let sel = client.selectedRange()
-        let loc: Int? = sel.location == NSNotFound ? nil : sel.location
+        let loc = cursor(client)
         let canRead = readable(client, loc) == true
         let n = composer.lastDeleteCount, nU16 = composer.lastDeleteUTF16Count
         let target = out.commit + out.marked
@@ -119,7 +161,7 @@ final class InputController: IMKInputController {
         if n > 0 {
             old = nil
             if canRead, let loc, case let s = loc - shown.utf16.count - nU16, s >= 0,
-               let d = client.attributedSubstring(from: NSRange(location: s, length: nU16))?.string, d.utf16.count == nU16 {
+               let d = text(client, NSRange(location: s, length: nU16)), d.utf16.count == nU16 {
                 old = d + shown
             }
         }
@@ -129,6 +171,22 @@ final class InputController: IMKInputController {
         let ins = String(target.dropFirst(common))
         let newShown = out.marked
         func expect(_ c: Int?) { caret = canRead && out.handled ? c : nil }
+        // Blind apps: keep our record of the text before the cursor in step with the edit.
+        let oldChars = old?.count ?? (n + shown.count)
+        defer {
+            if blind {
+                if out.handled || delCount > 0 || !ins.isEmpty { shadow = String(shadow.dropLast(oldChars)) + target }
+                if !out.handled {
+                    switch key {
+                    case .space?: shadow += " "; caret = loc.map { $0 + 1 }
+                    case .backspace? where !shadow.isEmpty && delCount == 0 && ins.isEmpty:
+                        shadow.removeLast(); caret = loc.map { $0 - 1 }
+                    default: shadow = ""; caret = nil
+                    }
+                }
+                if shadow.count > 400 { shadow = String(shadow.suffix(200)) }
+            }
+        }
 
         // Let the app handle the key natively when that gives exactly the new text (autocorrect, key repeat).
         if let event, let key {
@@ -148,9 +206,9 @@ final class InputController: IMKInputController {
             // so always pass it, and leave one extra character (the old last one) for it to delete.
             if !pass, out.handled, key == .backspace, canRead, let old, let last = old.last, let del, let loc,
                loc >= del.utf16.count, case let r = NSRange(location: loc - del.utf16.count, length: del.utf16.count),
-               client.attributedSubstring(from: r)?.string == del {
+               text(client, r) == del {
                 dbg("backspace replace \(r.location),\(r.length) del=\(del) ins=\(ins)+\(last)")
-                client.insertText(ins + String(last), replacementRange: r)
+                edit(client, ins + String(last), r, deleting: del)
                 shown = newShown
                 expect(r.location + ins.utf16.count)
                 return false
@@ -170,9 +228,9 @@ final class InputController: IMKInputController {
             expect(loc.map { $0 + ins.utf16.count })
         } else if let del, let loc, canRead, loc >= del.utf16.count,
                   case let r = NSRange(location: loc - del.utf16.count, length: del.utf16.count),
-                  client.attributedSubstring(from: r)?.string == del {
+                  text(client, r) == del {
             dbg("replace \(r.location),\(r.length) del=\(del) ins=\(ins)")
-            client.insertText(ins, replacementRange: r)
+            edit(client, ins, r, deleting: del)
             expect(r.location + ins.utf16.count)
         } else {
             // Could not verify the text (rare: word started where the app's text was unreadable). Best effort:
@@ -252,6 +310,7 @@ final class InputController: IMKInputController {
         hasMarked = false
         shown = ""
         caret = nil
+        shadow = ""
         CandidateWindow.shared.hide()
     }
 

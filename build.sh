@@ -41,3 +41,4 @@ echo "installed $DEST"
 # Register + enable + select via Carbon TIS (no System Settings needed; persists across reboots).
 "$DEST/Contents/MacOS/$EXE" --install
 echo "note: Chrome / Electron apps that were open keep talking to the old Emi Key process — quit and reopen them."
+echo "note: Chrome / Electron apps and Ghostty that were open keep talking to the old Emi Key process — quit and reopen them."

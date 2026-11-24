@@ -1,5 +1,5 @@
 // End-to-end test: types real key events into an app with Emi Key selected and checks the text.
-//   swift Tests/e2e/e2e.swift [--app textedit|chrome|chrome-user|safari|notes|terminal|ghostty] [--field textarea|input] [cases-file]
+//   swift Tests/e2e/e2e.swift [--app textedit|chrome|chrome-user|safari|notes|terminal|ghostty|ghostty-user] [--field textarea|input] [cases-file]
 //   (defaults: --app textedit, Tests/e2e/cases.txt; --field omnibox = Chrome's address bar, never sent Enter)
 // Needs: Accessibility (to post key events) and Automation → the target app for the app running this
 // (Terminal / Ghostty / …). Emi Key must be installed (./build.sh).
@@ -396,21 +396,30 @@ func notes() -> Target {
 }
 
 /// Terminals: a new window running `cat > file`; Ctrl-D ends it and the file holds what was typed.
-func terminal(ghostty: Bool) -> Target {
+/// `ghostty`: a separate Ghostty instance per case (`open -n`), so the user's Ghostty windows are never touched and
+/// a fresh process talks to the current Emi Key; it quits when `cat` ends. `ghostty-user` opens a window in theirs.
+func terminal(ghostty: Bool, separate: Bool = false) -> Target {
     let b = ghostty ? "com.mitchellh.ghostty" : "com.apple.Terminal"
     var file = URL(fileURLWithPath: "/dev/null"), winID = "", tag = ""
-    func ourWindow() -> AXUIElement? { running(b).flatMap { axWindow($0.processIdentifier, titleContains: tag) } }
-    return Target(bundle: b, setup: {
-        launchIfNeeded(b)
+    var instance: NSRunningApplication?
+    func app() -> NSRunningApplication? { separate ? instance : running(b) }
+    func ourWindow() -> AXUIElement? { app().flatMap { axWindow($0.processIdentifier, titleContains: tag) } }
+    return Target(bundle: b, app: app, setup: {
+        if !separate { launchIfNeeded(b) }
+        cleanups.append { if separate, let i = instance, !i.isTerminated { i.terminate() } }
     }, open: {
-        guard let app = running(b) else { return false }
         tag = "emikey-e2e-" + UUID().uuidString.prefix(8).lowercased()
         file = tmpDir.appendingPathComponent("\(tag).txt")
         // A tiny script: set the window title (OSC 0, marks the window as ours), then cat into the file.
         let script = tmpDir.appendingPathComponent("\(tag).sh")
         try? "#!/bin/sh\nprintf '\\033]0;\(tag)\\007'\nexec /bin/cat > '\(file.path)'\n".write(to: script, atomically: true, encoding: .utf8)
         chmod(script.path, 0o755)
-        if ghostty {
+        if separate {
+            let before = Set(NSRunningApplication.runningApplications(withBundleIdentifier: b).map(\.processIdentifier))
+            run("/usr/bin/open", ["-n", "-a", "/Applications/Ghostty.app", "--args", "--command=\(script.path)",
+                                  "--quit-after-last-window-closed=true"])
+            guard waitFor(10, { instance = NSRunningApplication.runningApplications(withBundleIdentifier: b).first { !before.contains($0.processIdentifier) }; return instance != nil }) else { return false }
+        } else if ghostty {
             guard let id = osa("tell application \"Ghostty\"\nset w to new window with configuration {command:\(asLiteral(script.path)), wait after command:false}\nreturn id of w\nend tell") else { return false }
             winID = id
         } else {
@@ -418,17 +427,19 @@ func terminal(ghostty: Bool) -> Target {
             winID = id
         }
         var w: AXUIElement?
-        guard waitFor(6, { w = ourWindow(); return w != nil }), let w else { return false }
+        guard waitFor(8, { w = ourWindow(); return w != nil }), let w, let app = app() else { return false }
         raise(app, w); pause(0.5)
         return true
     }, read: {
-        guard let app = running(b) else { return nil }
+        guard let app = app() else { return nil }
         key(2, .maskControl, pid: app.processIdentifier); pause(0.3)   // ⌃D flushes an unfinished line
         key(2, .maskControl, pid: app.processIdentifier)               // ⌃D again = end of input
         pause(1.0)
         return try? String(contentsOf: file, encoding: .utf8)
     }, close: {
-        if ghostty { osa("tell application \"Ghostty\" to close window id \(asLiteral(winID))", quiet: true) }
+        if separate {
+            if let i = instance, !waitFor(3, { i.isTerminated }) { i.terminate(); _ = waitFor(3) { i.isTerminated } }
+        } else if ghostty { osa("tell application \"Ghostty\" to close window id \(asLiteral(winID))", quiet: true) }
         else { osa("tell application \"Terminal\" to close (every window whose id is \(winID))", quiet: true) }
         if let w = ourWindow() { axPressClose(w) }
         try? FileManager.default.removeItem(at: file)
@@ -443,8 +454,9 @@ case "chrome-user": target = chrome(user: true)
 case "safari": target = safari()
 case "notes": target = notes()
 case "terminal": target = terminal(ghostty: false)
-case "ghostty": target = terminal(ghostty: true)
-default: fail("unknown --app \(appName) (textedit, chrome, chrome-user, safari, notes, terminal, ghostty)")
+case "ghostty": target = terminal(ghostty: true, separate: true)
+case "ghostty-user": target = terminal(ghostty: true)
+default: fail("unknown --app \(appName) (textedit, chrome, chrome-user, safari, notes, terminal, ghostty, ghostty-user)")
 }
 
 // MARK: main
@@ -462,6 +474,8 @@ var cases: [(String, String)] = caseText.split(separator: "\n", omittingEmptySub
 // A single-line field has no newlines: Enter cases only make sense in multi-line fields.
 // Never Enter in the address bar (it would navigate / search).
 if fieldKind == "input" || fieldKind == "omnibox" { cases = cases.filter { !$0.0.contains("⏎") } }
+// In a terminal Esc belongs to the program (it reaches `cat` as ^[), so the Esc flip is not tested there.
+if appName == "terminal" || appName.hasPrefix("ghostty") { cases = cases.filter { !$0.0.contains("⎋") } }
 
 let previous = currentSource()
 cleanups.append { _ = select(previous) }
