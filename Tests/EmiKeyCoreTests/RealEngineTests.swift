@@ -24,6 +24,8 @@ final class RealEngineTests: XCTestCase {
     func testCases() {
         let cases: [(String, String?, String)] = [
             ("hello world ", nil, "hello world "),
+            ("oo ", nil, "ô "), ("ow ", nil, "ơ "), ("uw ", nil, "ư "), ("af ", nil, "à "), ("ee ", nil, "ê "), ("ooi ", nil, "ôi "),
+            ("oo ", "", "ô "), ("bansh⌫ ", nil, "bán "), ("cais oo ", "", "cái ô "), ("as ", nil, "as "), ("is ", nil, "is "), ("of ", nil, "of "),
             ("I take the bus ", nil, "I take the bus "),
             ("cho con bus ", "", "cho con bú "),
             ("tooi ddi hocj ", nil, "tôi đi học "),

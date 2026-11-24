@@ -13,6 +13,9 @@ final class AppState {
     /// Test hook (`defaults write com.emi2git.inputmethod.EmiKey ForceHidden -bool YES`): treat every app as one
     /// that hides its text, to exercise the marked-text fallback. Re-read when a text field gains focus.
     var forceHidden = false
+    /// `defaults write com.emi2git.inputmethod.EmiKey DebugLog -bool YES`: log cursor/text details (test only —
+    /// they contain what is typed). Re-read when a text field gains focus.
+    var debug = false
 
     /// Apps whose reported cursor never moves; they get marked (underlined) text instead of in-place editing.
     /// Ghostty is known up front so the very first word there works too.

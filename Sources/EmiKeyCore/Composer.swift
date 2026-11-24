@@ -95,6 +95,8 @@ public final class Composer {
 
         case .backspace:
             if buffer.isEmpty { return ComposerOutput(handled: false) }
+            // Backspace inside a Vietnamese word keeps it Vietnamese (`bánh` ⌫ → bán, not the English `bans`).
+            if !chinese, override == nil, decide(buffer).isVi { override = .vi }
             buffer.removeLast()
             if buffer.isEmpty { return finish(commit: "") }
             if chinese && !buffer.contains(where: { $0.isNumber }) { chinese = false }
@@ -196,13 +198,23 @@ public final class Composer {
         if let o = override { return o == .vi ? (t, t, true) : (raw, t, false) }
         if english.isWord(raw) {
             if t.allSatisfy({ $0.isASCII }) { return (raw, t, false) }   // only an undo happened (`less` → les)
-            switch context() {
+            let ctx = context()
+            // A lone Vietnamese vowel (`oo` ô, `ow` ơ, `uw` ư, `af` à, `ee` ê, `ooi` ôi) beats a rare English
+            // "word" (interjections, abbreviations) unless the text around is English. Common words (`as`, `is`, `of`) stay.
+            if ctx != .en, ctx != .zh, Self.isLoneVowel(t), (english.rank(raw) ?? Int.max) > 1000 { return (t, t, true) }
+            switch ctx {
             case .vi?: return (t, t, true)
             case .en?, .zh?: return (raw, t, false)
             case nil: return learnedPrefersVi(raw) ? (t, t, true) : (raw, t, false)
             }
         }
         return (t, t, true)
+    }
+
+    /// Vietnamese syllable made of vowels only (no consonant letters): ô, ơ, à, ôi, ươi …
+    static func isLoneVowel(_ s: String) -> Bool {
+        let consonants = Set("bcdđfghjklmnpqrstvwxz")
+        return !s.isEmpty && !s.lowercased().contains(where: { consonants.contains($0) })
     }
 
     private func context() -> Lang? {

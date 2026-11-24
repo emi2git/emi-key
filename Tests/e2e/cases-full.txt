@@ -1,18 +1,28 @@
-# Real engine cases
-ma31	马
-tooi ddi 	tôi đi 
+# Real engine cases (run in every app: swift Tests/e2e/e2e.swift --app <app> Tests/e2e/cases-full.txt)
+tooi ddi hocj 	tôi đi học 
 cho con bus 	cho con bú 
 I take the bus 	I take the bus 
 ni3hao 	你好
+ni2hao3 	~你好
+ma31	马
+mp3 	mp3 
+hello⏎world 	hello⏎world 
+vieetj⎋ 	vieetj 
+Vieetj Nam 	Việt Nam 
+the bus ⎋	the bú 
 xiao4yang2shangshan 	小羊上山
 wo3 shi4 	我是
-mp3 	mp3 
-Vieetj Nam 	Việt Nam 
-vieetj⎋ 	vieetj 
-the bus ⎋	the bú 
 class test git 	class test git 
 Tooi hocj tieengs Trung: ni3hao 	Tôi học tiếng Trung: 你好
 vieet⌫⌫ 	vie 
-hello⏎world 	hello⏎world 
-ni3hao⏎	ni3hao⏎
 ma3⌫⌫ 	m 
+abcd⌫e 	abce 
+ni3hao⏎	ni3hao⏎
+oo 	ô 
+ow 	ơ 
+uw 	ư 
+af 	à 
+ee 	ê 
+ooi 	ôi 
+bansh⌫ 	bán 
+ddi 	đi 

@@ -20,6 +20,12 @@ final class InputController: IMKInputController {
     /// Then (and only then) the word is shown as classic marked text.
     private var markedMode = false
     private var hasMarked = false
+    /// No key handled yet since the text field gained focus.
+    private var freshField = true
+
+    private func dbg(_ msg: @autoclosure () -> String) {
+        if state.debug { let m = msg(); log.notice("dbg \(m, privacy: .public)") }
+    }
 
     override func recognizedEvents(_ sender: Any!) -> Int {
         Int(NSEvent.EventTypeMask.keyDown.rawValue)
@@ -35,9 +41,15 @@ final class InputController: IMKInputController {
     private func process(_ event: NSEvent, client: IMKTextInput) -> Bool {
         let key = Self.keyInput(event)
         let sel = client.selectedRange()
+        if state.debug {
+            let around = sel.location == NSNotFound ? nil : client.attributedSubstring(from: NSRange(location: max(0, sel.location - 12), length: min(12, sel.location)))?.string
+            log.notice("dbg key=\(String(describing: key), privacy: .public) app=\(client.bundleIdentifier() ?? "?", privacy: .public) sel=\(sel.location, privacy: .public),\(sel.length, privacy: .public) caret=\(self.caret.map(String.init) ?? "nil", privacy: .public) shown=\(self.shown, privacy: .public) before=\(around ?? "<nil>", privacy: .public) marked=\(client.markedRange().location, privacy: .public)")
+        }
         let loc: Int? = sel.location == NSNotFound ? nil : sel.location
         // Cursor moved / clicked elsewhere / selection: the shown text simply stays; forget the word.
-        if let c = caret, loc != c || sel.length != 0 {
+        // A selection that starts right at our cursor is the app's inline autocomplete (Chrome's address bar,
+        // Spotlight, search fields): the word is still ours.
+        if let c = caret, loc != c {
             // The app's cursor did not move although we typed into it (e.g. Ghostty, some terminals and
             // Electron apps report a fixed location). It can't be edited in place: use marked text there from now on.
             if let l = loc, l == lastLoc, sel.length == 0, !shown.isEmpty { state.markUntracked(client.bundleIdentifier()) }
@@ -45,8 +57,12 @@ final class InputController: IMKInputController {
         }
         lastLoc = loc
         if shown.isEmpty && !hasMarked {
-            markedMode = state.isUntracked(client.bundleIdentifier()) || readable(client, loc) == false
+            // Right after a field gains focus Chromium may not have told macOS where the cursor is yet
+            // (selectedRange = NotFound for the first key). That says nothing about the app: stay direct.
+            let settling = loc == nil && freshField && !state.forceHidden
+            markedMode = state.isUntracked(client.bundleIdentifier()) || (!settling && readable(client, loc) == false)
         }
+        freshField = false
         var start = loc.map { $0 - shown.utf16.count }
         if markedMode, hasMarked, case let m = client.markedRange(), m.location != NSNotFound { start = m.location }
         let out = composer.handle(key, precedingText: precedingText(client, start))
@@ -127,7 +143,20 @@ final class InputController: IMKInputController {
             } else if !out.handled, delCount == 0, ins.isEmpty {
                 pass = true
             }
+            // Backspace that changes more than the last character (`việt` ⌫ → viêt). Chromium delivers the
+            // Backspace to the page even when an input method consumed it, AppKit apps do so when we pass it on:
+            // so always pass it, and leave one extra character (the old last one) for it to delete.
+            if !pass, out.handled, key == .backspace, canRead, let old, let last = old.last, let del, let loc,
+               loc >= del.utf16.count, case let r = NSRange(location: loc - del.utf16.count, length: del.utf16.count),
+               client.attributedSubstring(from: r)?.string == del {
+                dbg("backspace replace \(r.location),\(r.length) del=\(del) ins=\(ins)+\(last)")
+                client.insertText(ins + String(last), replacementRange: r)
+                shown = newShown
+                expect(r.location + ins.utf16.count)
+                return false
+            }
             if pass {
+                dbg("pass old=\(old ?? "nil") target=\(target) caretAfter=\(caretAfter.map(String.init) ?? "nil")")
                 shown = newShown
                 if out.handled { expect(caretAfter) } else { caret = nil }
                 return false
@@ -136,17 +165,20 @@ final class InputController: IMKInputController {
 
         let none = NSRange(location: NSNotFound, length: 0)
         if delCount == 0 {
+            dbg("insert \(ins)")
             if !ins.isEmpty { client.insertText(ins, replacementRange: none) }
             expect(loc.map { $0 + ins.utf16.count })
         } else if let del, let loc, canRead, loc >= del.utf16.count,
                   case let r = NSRange(location: loc - del.utf16.count, length: del.utf16.count),
                   client.attributedSubstring(from: r)?.string == del {
+            dbg("replace \(r.location),\(r.length) del=\(del) ins=\(ins)")
             client.insertText(ins, replacementRange: r)
             expect(r.location + ins.utf16.count)
         } else {
             // Could not verify the text (rare: word started where the app's text was unreadable). Best effort:
             // replace by range if we know the cursor, else just append.
             caret = nil
+            dbg("unverified del=\(del ?? "nil") delCount=\(delCount) ins=\(ins) loc=\(loc.map(String.init) ?? "nil") canRead=\(canRead)")
             if let del, let loc, loc >= del.utf16.count {
                 client.insertText(ins, replacementRange: NSRange(location: loc - del.utf16.count, length: del.utf16.count))
             } else {
@@ -226,10 +258,14 @@ final class InputController: IMKInputController {
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
         state.forceHidden = state.defaults.bool(forKey: "ForceHidden")
+        state.debug = state.defaults.bool(forKey: "DebugLog")
+        dbg("activate \((sender as? IMKTextInput)?.bundleIdentifier() ?? "?")")
         reset()
+        freshField = true
     }
 
     override func deactivateServer(_ sender: Any!) {
+        dbg("deactivate \((sender as? IMKTextInput)?.bundleIdentifier() ?? "?")")
         reset(sender)
         super.deactivateServer(sender)
     }
