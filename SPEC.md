@@ -11,7 +11,9 @@ One macOS input method for English, Vietnamese and Mandarin with no switching.
 - Works in every app (Terminal and code editors included). Secure fields are skipped by macOS.
   - Chromium/Electron: the first key after focusing a field may report no cursor (stay direct); a consumed Backspace still
     reaches the page (so Backspace edits are passed on, leaving one character for it); an inline-autocomplete selection
-    after the cursor (address bar) does not end the word.
+    after the cursor (address bar) does not end the word. Right after the first key Chromium deactivates and re-activates
+    the input method, often on a new controller: the word in progress is handed over (same app, < 0.5 s), not reset.
+    Its reported cursor can lag one edit behind (still where it was before our last replacement): trusted to our record once.
   - Terminal.app: its reported cursor/text drift from the screen → edits use Emi Key's own record of the cursor and of
     what it typed; Backspace/Esc go straight to the shell, a backward cursor jump ends the word.
   - Ghostty: ignores replacement ranges → an edit is sent as DEL × n + the new text (like typing it).

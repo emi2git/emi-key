@@ -29,6 +29,11 @@ final class InputController: IMKInputController {
     private var guess: Int?
     /// No key handled yet since the text field gained focus.
     private var freshField = true
+    /// The word was adopted from Chromium's deactivate/activate blip: check it is still before the cursor.
+    private var adopted = false
+    /// This key's cursor when the app's report lags behind our last edit (see SelectionLag); nil = ask the app.
+    private var trusted: Int?
+    private var lastWasLag = false
 
     private func dbg(_ msg: @autoclosure () -> String) {
         if state.debug { let m = msg(); log.notice("dbg \(m, privacy: .public)") }
@@ -50,7 +55,7 @@ final class InputController: IMKInputController {
         let sel = client.selectedRange()
         if state.debug {
             let around = sel.location == NSNotFound ? nil : client.attributedSubstring(from: NSRange(location: max(0, sel.location - 12), length: min(12, sel.location)))?.string
-            log.notice("dbg key=\(String(describing: key), privacy: .public) app=\(client.bundleIdentifier() ?? "?", privacy: .public) sel=\(sel.location, privacy: .public),\(sel.length, privacy: .public) caret=\(self.caret.map(String.init) ?? "nil", privacy: .public) shown=\(self.shown, privacy: .public) before=\(around ?? "<nil>", privacy: .public) marked=\(client.markedRange().location, privacy: .public)")
+            log.notice("dbg key=\(String(describing: key), privacy: .public) ctl=\(ObjectIdentifier(self).hashValue, privacy: .public) app=\(client.bundleIdentifier() ?? "?", privacy: .public) sel=\(sel.location, privacy: .public),\(sel.length, privacy: .public) caret=\(self.caret.map(String.init) ?? "nil", privacy: .public) shown=\(self.shown, privacy: .public) before=\(around ?? "<nil>", privacy: .public) marked=\(client.markedRange().location, privacy: .public)")
         }
         blind = state.isBlind(client.bundleIdentifier()) && !state.forceHidden
         if blind {
@@ -60,7 +65,16 @@ final class InputController: IMKInputController {
             if caret != nil, let r, let last = lastReported, r < last { reset() }
             lastReported = r
         }
-        let loc = cursor(client)
+        trusted = nil
+        defer { trusted = nil }
+        var loc = cursor(client)
+        // Chromium's selection may not reflect our last edit yet: then the cursor is where our record says.
+        let lag = !blind && SelectionLag.isLag(reported: loc, expected: caret ?? guess, previous: lastLoc, lastWasLag: lastWasLag)
+        lastWasLag = lag
+        if lag, let e = caret ?? guess {
+            dbg("selection lags: \(loc.map(String.init) ?? "nil") → \(e)")
+            trusted = e; loc = e
+        }
         // Cursor moved / clicked elsewhere / selection: the shown text simply stays; forget the word.
         // A selection that starts right at our cursor is the app's inline autocomplete (Chrome's address bar,
         // Spotlight, search fields): the word is still ours.
@@ -71,6 +85,14 @@ final class InputController: IMKInputController {
             reset()
         }
         lastLoc = loc
+        if adopted {
+            adopted = false
+            if !shown.isEmpty, !blind, let l = loc, case let n = min(l, shown.utf16.count), n > 0,
+               !FocusBlip<Word>.wordStillThere(before: client.attributedSubstring(from: NSRange(location: l - n, length: n))?.string, shown: shown) {
+                dbg("adopted word gone")
+                reset()
+            }
+        }
         // The app's text was unreadable after the last key (word began at the very start of the field), so `caret`
         // is unknown — but where the cursor should be is known: if it is elsewhere now (a click), forget the word.
         if caret == nil, let g = guess, !shown.isEmpty, !markedMode, !blind, let l = loc, l != g { reset() }
@@ -119,6 +141,7 @@ final class InputController: IMKInputController {
 
     /// Where the cursor is: the app's answer, or for blind apps our own record once we have one.
     private func cursor(_ client: IMKTextInput) -> Int? {
+        if let t = trusted { return t }
         if blind, let c = caret { return c }
         let l = client.selectedRange().location
         if blind, caret == nil { shadow = "" }
@@ -340,34 +363,41 @@ final class InputController: IMKInputController {
         state.debug = state.defaults.bool(forKey: "DebugLog")
         state.keyLog = state.defaults.bool(forKey: "KeyLog")
         let id = (sender as? IMKTextInput)?.bundleIdentifier()
-        dbg("activate \(id ?? "?")")
-        // Chromium deactivates and re-activates the input method right after the first key in a newly focused field:
-        // keep the word when that blip comes straight back to this same controller and app.
-        if let p = Self.pending, p.controller == ObjectIdentifier(self), p.bundle == id, Date().timeIntervalSince(p.time) < 0.5 {
-            Self.pending = nil
+        dbg("activate \(id ?? "?") ctl=\(ObjectIdentifier(self).hashValue) client=\((sender as AnyObject?).map { ObjectIdentifier($0).hashValue } ?? 0) shown=\(shown)")
+        // Chromium deactivates and re-activates the input method right after the first key in a newly focused field,
+        // often on a new controller: adopt the word the deactivated one parked (it is already text in the document).
+        if let w = Self.blip.take(bundle: id) {
+            shown = w.shown; caret = w.caret; guess = w.guess; lastLoc = w.lastLoc; shadow = w.shadow; markedMode = false; hasMarked = false
+            freshField = false; adopted = true
+            dbg("adopted shown=\(shown)")
             return
         }
-        Self.pending = nil
         reset()
         freshField = true
     }
 
-    private static var pending: (controller: ObjectIdentifier, bundle: String?, time: Date)?
+    /// Per-word state handed across Chromium's deactivate/activate blip (see FocusBlip).
+    private struct Word { var shown: String; var caret: Int?; var guess: Int?; var lastLoc: Int?; var shadow: String }
+    private static var blip = FocusBlip<Word>()
 
     override func deactivateServer(_ sender: Any!) {
         let id = (sender as? IMKTextInput)?.bundleIdentifier()
-        dbg("deactivate \(id ?? "?")")
+        dbg("deactivate \(id ?? "?") ctl=\(ObjectIdentifier(self).hashValue) shown=\(shown)")
         if !markedMode, !hasMarked, !shown.isEmpty {
             // Direct mode: the word is already plain text in the document, nothing to commit. Decide on activation.
-            Self.pending = (ObjectIdentifier(self), id, Date())
+            Self.blip.park(Word(shown: shown, caret: caret, guess: guess, lastLoc: lastLoc, shadow: shadow), bundle: id)
             CandidateWindow.shared.hide()
         } else {
+            Self.blip.clear()
             reset(sender)
         }
+        // This controller's own copy is stale now (another one may adopt the word and the composer is shared).
+        shown = ""; caret = nil; guess = nil; shadow = ""; adopted = false
         super.deactivateServer(sender)
     }
 
     override func commitComposition(_ sender: Any!) {
+        dbg("commitComposition ctl=\(ObjectIdentifier(self).hashValue) shown=\(shown)")
         reset(sender)
     }
 
