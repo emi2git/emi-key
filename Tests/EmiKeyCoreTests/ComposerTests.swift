@@ -150,6 +150,33 @@ final class ComposerTests: XCTestCase {
         XCTAssertFalse(out("tooi\n⎋").handled)
     }
 
+    func testFlipTextIsWhatEscWouldReplace() {
+        let c = make()
+        _ = c.handle(.char("b"), precedingText: ""); _ = c.handle(.char("u"), precedingText: "")
+        _ = c.handle(.char("s"), precedingText: "")
+        XCTAssertNil(c.flipText, "nothing committed yet")
+        _ = c.handle(.space, precedingText: "")
+        XCTAssertEqual(c.flipText, "bus ")
+        _ = c.handle(.other, precedingText: "bus ")   // Esc the app keeps (word not visible): no flip afterwards
+        XCTAssertNil(c.flipText)
+        _ = c.handle(.char("a"), precedingText: "bus ")
+        _ = c.handle(.enter, precedingText: "bus ")
+        XCTAssertNil(c.flipText, "Enter commits without a flippable word")
+    }
+
+    func testDraftResumesTheWord() {
+        // Focus blip: deactivation commits `too`, the next activation takes it back and goes on (`tooi` → tôi).
+        let c = make()
+        for k in "too" { _ = c.handle(.char(k), precedingText: "") }
+        let d = c.draft
+        XCTAssertNotNil(d)
+        XCTAssertEqual(c.flush(), "tô")
+        c.resume(d!)
+        XCTAssertEqual(c.handle(.char("i"), precedingText: "").marked, "tôi")
+        XCTAssertEqual(c.handle(.space, precedingText: "").commit, "tôi ")
+        XCTAssertNil(make().draft, "no word, no draft")
+    }
+
     func testEscFlipWhileComposing() {
         XCTAssertEqual(out("bus⎋").marked, "bú")
         XCTAssertEqual(type("bus⎋ "), "bú ")

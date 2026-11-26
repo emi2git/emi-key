@@ -10,9 +10,6 @@ final class AppState {
     let defaults: UserDefaults
     let composer: Composer
     let learnedFile: URL
-    /// Test hook (`defaults write com.emi2git.inputmethod.EmiKey ForceHidden -bool YES`): treat every app as one
-    /// that hides its text, to exercise the marked-text fallback. Re-read when a text field gains focus.
-    var forceHidden = false
     /// `defaults write com.emi2git.inputmethod.EmiKey DebugLog -bool YES`: log cursor/text details (test only —
     /// they contain what is typed). Re-read when a text field gains focus.
     var debug = false
@@ -20,32 +17,18 @@ final class AppState {
     /// so the harness can tell Emi Key saw its keys. Off by default: nothing is logged per key.
     var keyLog = false
 
-    /// Apps whose reported cursor never moves; they get marked (underlined) text instead of in-place editing.
-    /// Ghostty is known up front so the very first word there works too.
-    private lazy var untracked: Set<String> = Set(defaults.stringArray(forKey: "UntrackedApps") ?? [])
+    /// Terminals: a key that ends a composition is dropped (or replaced by the committed text), so Enter/Tab/Esc are
+    /// sent together with the committed word; Esc always belongs to the program (never a flip); the text they report
+    /// is the screen grid, so context comes from Emi Key's own word memory.
+    /// `defaults write com.emi2git.inputmethod.EmiKey PtyApps -array-add <bundle id>` adds more.
+    private lazy var terminals: Set<String> = Set(defaults.stringArray(forKey: "PtyApps") ?? [])
+        .union(["com.apple.Terminal", "com.mitchellh.ghostty"])
+    func isTerminal(_ id: String?) -> Bool { id.map { terminals.contains($0) } ?? false }
 
-    func isUntracked(_ id: String?) -> Bool { id.map { (untracked.contains($0) || marked.contains($0)) && !blind.contains($0) } ?? false }
-
-    /// Apps whose text fields ignore replacement ranges (WeChat 4, Qt: a replacement is inserted after the old text
-    /// instead of over it). Words are composed as marked text there, and a committed word cannot be flipped with Esc.
-    /// `defaults write com.emi2git.inputmethod.EmiKey MarkedApps -array-add <bundle id>` adds more.
-    private lazy var marked: Set<String> = Set(defaults.stringArray(forKey: "MarkedApps") ?? []).union(["com.tencent.xinWeChat"])
-    func isMarkedApp(_ id: String?) -> Bool { id.map { marked.contains($0) } ?? false }
-    func markUntracked(_ id: String?) {
-        guard let id, !untracked.contains(id), !blind.contains(id) else { return }
-        untracked.insert(id)
-        defaults.set(Array(untracked), forKey: "UntrackedApps")
-    }
-
-    /// Apps that apply in-place edits correctly but report a cursor/text that drifts from what is on screen
-    /// (Terminal.app: its text is the screen grid). Emi Key edits them directly, trusting its own record of
-    /// what it typed (cursor + recent text) instead of what the app reports. `defaults … BlindApps` adds more.
-    private lazy var blind: Set<String> = Set(defaults.stringArray(forKey: "BlindApps") ?? []).union(["com.apple.Terminal"]).union(pty)
-    func isBlind(_ id: String?) -> Bool { id.map { blind.contains($0) } ?? false }
-    /// Terminals that ignore replacement ranges (Ghostty): an edit is sent as DEL characters + the new text,
-    /// exactly what typing Backspace and the letters would send to the shell.
-    private lazy var pty: Set<String> = Set(defaults.stringArray(forKey: "PtyApps") ?? []).union(["com.mitchellh.ghostty"])
-    func isPty(_ id: String?) -> Bool { id.map { pty.contains($0) } ?? false }
+    /// Apps whose reported text is not the field's (WeChat 4 reports e.g. its placeholder): context comes from Emi
+    /// Key's own word memory, and a committed word is never flipped there.
+    private let ownTextHidden: Set<String> = ["com.tencent.xinWeChat"]
+    func readsContext(_ id: String?) -> Bool { !isTerminal(id) && !(id.map { ownTextHidden.contains($0) } ?? false) }
 
     private init() {
         // A suite named after our own bundle id is our standard domain (UserDefaults refuses that name as a suite).

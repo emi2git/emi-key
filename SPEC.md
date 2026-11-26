@@ -7,22 +7,18 @@ One macOS input method for English, Vietnamese and Mandarin with no switching.
 - Enabled once in System Settings → Keyboard → Input Sources; macOS starts it at login automatically.
 - Lives in the top-right input menu with the C2 icon (three brush strokes, template image).
 - Menu: two checkmark items only — Traditional Chinese, Old tone style (hòa). No windows; super light (no timers or polling, dictionaries load once).
-- Direct insertion (like EVKey/OpenKey): the word being typed is real text, never underlined marked text. Each key becomes the smallest edit (replace only the changed tail); unchanged plain letters pass straight to the app. Apps that hide their text from input methods (cannot be edited in place) fall back to classic underlined marked text. Moving the cursor / clicking / switching app mid-word just forgets the word (the text stays).
-- Works in every app (Terminal and code editors included). Secure fields are skipped by macOS.
-  - Chromium/Electron: the first key after focusing a field may report no cursor (stay direct); a consumed Backspace still
-    reaches the page (so Backspace edits are passed on, leaving one character for it); an inline-autocomplete selection
-    after the cursor (address bar) does not end the word. Right after the first key Chromium deactivates and re-activates
-    the input method, often on a new controller: the word in progress is handed over (same app, < 0.5 s), not reset.
-    Its reported cursor can lag one edit behind (still where it was before our last replacement): trusted to our record once.
-  - Terminal.app: its reported cursor/text drift from the screen → edits use Emi Key's own record of the cursor and of
-    what it typed; Backspace/Esc go straight to the shell, a backward cursor jump ends the word.
-  - Ghostty: ignores replacement ranges → an edit is sent as DEL × n + the new text (like typing it).
-  - Apps whose cursor never moves (auto-detected, `UntrackedApps`) → marked text.
-  - WeChat 4 (Qt) inserts a replacement after the old text instead of over it (`tooi` → tooôi): apps in `MarkedApps`
-    (built in: WeChat) always compose with marked text, and Esc there flips only the word still being composed.
-  - Keynote/Numbers/Pages, Xcode and Spotlight need no quirk (direct insertion works).
-  - Marked text in terminals (`PtyApps`, Ghostty): Enter/Tab are sent together with the committed word (terminals drop a
-    key that ends a composition).
+- Classic marked text in every app: the word being composed is underlined; it becomes plain text when committed.
+  No per-app editing modes (direct insertion was dropped: it needed per-app hacks and still broke — see CLAUDE.md).
+  - Space / punctuation commit the word (+ the key). Enter, Tab, arrows and ⌘/⌃/⌥ shortcuts commit the word exactly
+    as shown and the app gets the key on the same, first press. Backspace edits the composition (empty = gone).
+  - Clicking elsewhere, focus change, app switch: the composition is committed as shown.
+  - Terminals (Terminal.app, Ghostty, `PtyApps`): they drop a key that ends a composition, so Enter/Tab/Esc are sent
+    together with the committed word (`word\r`). An arrow key that ends a word may need a second press there.
+  - Chromium deactivates and re-activates the input method right after the first key in a newly focused field (often
+    on a new controller): that commits the word; on the next key (same app, < 0.5 s) it is taken back into the
+    composition if it is still just before the cursor (`FocusBlip`), else it stays committed.
+  - Context comes from the text before the composition, except in terminals (screen grid) and WeChat 4 (reports its
+    placeholder): there Emi Key's own memory of the last words in the field is used.
   - After reinstalling Emi Key, Chrome/Electron apps and Ghostty that were already open must be relaunched once
     (they keep the dead connection to the old process).
 - Offline. No network. Learned data in `~/Documents/Emi Key/` (learned.json).
@@ -44,9 +40,12 @@ One macOS input method for English, Vietnamese and Mandarin with no switching.
   (read via IMK client text; fall back to Emi Key's own record of recent words in this field).
   - Previous words Vietnamese (have diacritics / are Vietnamese-only) → Vietnamese.
   - Previous words English, or start of field → English.
-- Esc right after a word flips it between the raw letters and the transformed version — except in terminals
-  (`BlindApps`/`PtyApps`: Terminal, Ghostty), where Esc belongs to the program (vim, readline): the word stays as
-  shown and Esc is passed on. (Terminal.app does not give Esc to input methods at all.)
+- Esc while composing a word that Telex can transform toggles it: Vietnamese → raw letters, raw letters →
+  Vietnamese (still composing; Space commits). Other words: Esc commits the raw letters and reaches the app.
+- Esc right after a committed word (`the bus ⎋` → the bú) flips it — only when the app shows that word just before the
+  cursor (it is replaced via its range). Otherwise (WeChat, text not readable, cursor moved, Chromium's lagging
+  selection) Esc simply goes to the app. In terminals Esc always belongs to the program (vim, readline): the word is
+  committed as shown and Esc is passed on.
 
 ## Chinese (pinyin with tone numbers)
 - Chinese is triggered only by a digit 0–5 right after a valid pinyin syllable (`ma3`, `nihao3`, `ni3hao`).
@@ -59,7 +58,7 @@ One macOS input method for English, Vietnamese and Mandarin with no switching.
 - A digit right after a tone digit picks that candidate (`ma3` then `1` → 马). Space picks the first candidate. Enter is always passed to the app; raw letters stay. Esc cancels to the raw letters.
 - Digit not after a valid pinyin syllable, or > 5 → typed normally (`mp3`, `iphone15`, `2026`).
 - Simplified by default; Traditional option in the menu.
-- While composing, the raw pinyin (`ni3hao`) is plain text in the document; the candidate bar sits under its first letter; picking replaces it.
+- While composing, the raw pinyin (`ni3hao`) is the underlined marked text; the candidate bar sits under its first letter; picking replaces it.
 
 ## Keys
 - Enter is always the user's own Enter: the word stays as shown and the app gets Enter on the first press.
@@ -72,7 +71,7 @@ One macOS input method for English, Vietnamese and Mandarin with no switching.
 
 ## Code layout
 - `Sources/EmiKeyCore/` — pure Swift library, no AppKit: TelexEngine, VietSyllable, PinyinEngine, Dictionary, ContextDetector, Composer (the state machine taking key events → in-progress text / commit / candidates).
-- `Sources/EmiKey/` — IMK app: InputController, CandidateWindow, menu, icon.
+- `Sources/EmiKey/` — IMK app: InputController (marked text), CandidateWindow, menu, icon.
 - `Tests/EmiKeyCoreTests/` — unit tests (`swift test`).
 - `Tests/e2e/` — types real keystrokes into TextEdit, Chrome (page + address bar), Safari, Notes, Terminal, Ghostty,
   Pages, Numbers, Keynote, Xcode, Spotlight and WeChat's search field with Emi Key selected and checks the text

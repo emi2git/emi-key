@@ -1,7 +1,7 @@
 # Emi Key — maintainer notes
 
-macOS input method (InputMethodKit): English + Vietnamese Telex + pinyin with tone digits, no switching. Direct
-insertion (the word in progress is real text, no underline). Behaviour spec: [SPEC.md](SPEC.md). User docs:
+macOS input method (InputMethodKit): English + Vietnamese Telex + pinyin with tone digits, no switching. Classic
+underlined marked text in every app (the word in progress is marked text until committed). Behaviour spec: [SPEC.md](SPEC.md). User docs:
 [README.md](README.md). Open work: [TASKS.md](TASKS.md).
 
 ## Architecture
@@ -11,12 +11,16 @@ insertion (the word in progress is real text, no underline). Behaviour spec: [SP
   - `TelexEngine` + `VietSyllable` — Telex transform, only when the result is a valid syllable.
   - `ContextDetector` + `EnglishWords` — language of the words before the cursor; English word list with rank.
   - `PinyinEngine` — loads `Resources/pinyin.tsv` (~55 ms), segmentation + ranked candidates.
-  - `ChromiumQuirks` — pure helpers for Chromium's focus blip / lagging selection (tested without an app).
-- `Sources/EmiKey/` — the IMK app: `InputController` turns composer output into the smallest edit of the client
-  text (`insertText(_:replacementRange:)`), falls back to marked text for apps that hide their text; per-app
-  handling lives in `AppState` (`BlindApps`, `PtyApps`, `UntrackedApps`, `MarkedApps`). `InputSources` = `--install/--select/--disable`.
-- Per-app quirks (Chromium, Terminal, Ghostty, WeChat, …) are documented in SPEC.md → System integration. Keep
-  that list current when adding one. Known app behaviour that is not Emi Key: Notes autocorrects (đi → dì,
+  - `FocusBlip` — hands a committed word across Chromium's deactivate/activate blip (tested without an app).
+- `Sources/EmiKey/` — the IMK app: `InputController` shows the word as marked text (`setMarkedText`), commits with
+  `insertText`; Esc flip of a committed word replaces it by range only when the client shows it before the cursor.
+  The only per-app sets live in `AppState`: terminals (`isTerminal`: Terminal, Ghostty, `PtyApps` — Enter/Tab/Esc sent
+  with the commit, context from word memory) and apps whose reported text is not the field's (WeChat).
+  `InputSources` = `--install/--select/--disable`.
+- History: Emi Key used direct insertion (word as plain text, edited in place) from 42648ef to **f427040** (last
+  direct-insertion commit: ChromiumQuirks FocusBlip/SelectionLag, Ghostty DEL edits, Terminal cursor record,
+  `UntrackedApps`, `MarkedApps`). Dropped for marked text everywhere: it needed per-app hacks and still broke.
+- Per-app behaviour is documented in SPEC.md → System integration. Keep it current when adding a quirk. Known app behaviour that is not Emi Key: Notes autocorrects (đi → dì,
   viêt → việt) and capitalises — the user's Notes settings are left alone, so those 2 cases fail there.
 
 ## Data
@@ -54,8 +58,7 @@ Safety rules (built into the harness — keep them when changing it):
 - WeChat: only the main-window search field; never Enter, never a chat; cleared + Esc after each case; never
   launched or quit. If WeChat predates the installed Emi Key it may still talk to the old process (keys arrive
   untransformed): report it, do not quit the user's WeChat.
-- The harness sets `KeyLog` (content-free per-key lines) and restores Emi Key's settings (it learns
-  `UntrackedApps` while tested); after an aborted run check `defaults read com.emi2git.inputmethod.EmiKey`,
+- The harness sets `KeyLog` (content-free per-key lines) and restores Emi Key's settings; after an aborted run check `defaults read com.emi2git.inputmethod.EmiKey`,
   Open Recent lists and iCloud `Untitled` documents by hand.
 - When waiting for a background run, wait on its PID — never `pgrep -f` a pattern that is in your own command line.
 

@@ -20,12 +20,12 @@ just type. Version 1.0.0. Details: [SPEC.md](SPEC.md).
 | `xian1`, `qu4xian` | … 西安, 去西安 | a syllable that also splits into a common word (xi'an) offers that word too |
 | `mp3`, `iphone15`, `2026` | mp3, iphone15, 2026 | digits after non-pinyin stay digits |
 
-- **Esc** right after a word flips it between raw letters and Vietnamese (`the bus ⎋` → the bú). While composing
-  Chinese, Esc keeps the raw pinyin. In terminals (Terminal, Ghostty) Esc always goes to the program (vim,
-  the shell) and never flips.
+- **Esc** while typing a word flips it between raw letters and Vietnamese; right after a word it flips that word
+  (`the bus ⎋` → the bú) where the app shows its text (not in WeChat). While composing Chinese, Esc keeps the raw
+  pinyin. In terminals (Terminal, Ghostty) Esc always goes to the program (vim, the shell) and never flips.
 - **Enter**, Tab, arrows and ⌘/⌃/⌥ shortcuts keep the word exactly as shown and always reach the app on the first press.
-- Clicking or moving the cursor mid-word just leaves the word as it is.
-- Text is inserted directly (no underline), except in apps that hide their text from input methods.
+- The word being typed is underlined (classic input-method style) in every app; clicking, moving the cursor or
+  switching apps mid-word keeps it as shown.
 
 ## Menu (input menu, C2 icon)
 
@@ -54,7 +54,7 @@ scripts/uninstall.sh --purge   # also delete learned words (~/Documents/Emi Key)
   They keep a connection to the old Emi Key process and type plain letters until relaunched.
 - Plain letters everywhere: check that Emi Key is selected in the input menu; reinstall with `./build.sh --force`.
 - Password fields: macOS turns input methods off there, so you type plain letters — that is expected.
-- A terminal that loses keys or shows underlined text: `defaults write com.emi2git.inputmethod.EmiKey PtyApps -array-add <bundle id>`.
+- A terminal that loses the Enter after a word: `defaults write com.emi2git.inputmethod.EmiKey PtyApps -array-add <bundle id>`.
 
 ## Privacy
 
@@ -73,5 +73,4 @@ swift Tests/e2e/e2e.swift --app textedit Tests/e2e/cases-full.txt   # real keyst
 
 The e2e harness only types into windows it creates, waits until nobody uses the keyboard or mouse, stops when you
 type or focus leaves, and cleans up after itself (documents, settings, Open Recent entries). Maintainer notes: [CLAUDE.md](CLAUDE.md).
-It needs Accessibility + Automation permission for the terminal running it. `defaults write … ForceHidden -bool YES`
-forces the underlined (marked-text) path for testing. Icons: `swift scripts/make-icons.swift`.
+It needs Accessibility + Automation permission for the terminal running it. Icons: `swift scripts/make-icons.swift`.

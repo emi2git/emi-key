@@ -124,6 +124,25 @@ public final class Composer {
         return pickCandidate(index)
     }
 
+    /// Esc right now would flip the last committed word: the text it replaces (word + separator), else nil.
+    /// The app checks that this text is really just before the cursor before letting Esc flip it.
+    public var flipText: String? { flippable.map { $0.shown + $0.sep } }
+
+    /// The word being composed (and the field's word memory), to resume it after a focus blip. nil = no word.
+    public struct Draft: Sendable {
+        fileprivate let buffer: String, shown: String, chinese: Bool, override: Lang?, memory: [String]
+    }
+    public var draft: Draft? {
+        buffer.isEmpty ? nil : Draft(buffer: buffer, shown: shown, chinese: chinese, override: override, memory: memory)
+    }
+    /// Continue a word that `flush()` committed (it is still the text just before the cursor).
+    public func resume(_ d: Draft) {
+        reset()
+        buffer = d.buffer; shown = d.shown; chinese = d.chinese; override = d.override; memory = d.memory
+        flippable = nil
+        if chinese { refreshCandidates() }
+    }
+
     /// Focus lost / app switched: returns text to commit, clears state and the field's word memory.
     public func flush() -> String {
         lastDeleteCount = 0; lastDeleteUTF16Count = 0

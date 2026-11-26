@@ -281,7 +281,7 @@ func activate(_ bundle: String) {
 let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("emikey-e2e-\(getpid())")
 try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
 cleanups.append { try? FileManager.default.removeItem(at: tmpDir) }
-// Emi Key's own settings too: it learns `UntrackedApps` while being tested (put back as they were).
+// Emi Key's own settings too (KeyLog etc., put back as they were).
 keepDefaults(emiID)
 
 // Test page for browsers: one <textarea> and one <input>, no spellcheck/autocorrect.
@@ -920,7 +920,7 @@ if appName == "terminal" || appName.hasPrefix("ghostty") {
     cases = cases.filter { !$0.0.contains("⎋") } + [("the bus ⎋", "the bus \u{1b}"), ("vieetj⎋", "việt\u{1b}")]
 }
 // WeChat: Esc that is not a flip leaves the search field (focus may move towards a chat), and a committed word is
-// not flipped there (MarkedApps): no Esc cases.
+// not flipped there (its reported text is not the field's): no Esc cases.
 if appName == "wechat" { cases = cases.filter { !$0.0.contains("⎋") } }
 
 let previous = currentSource()
