@@ -681,7 +681,7 @@ func keynote() -> Target {
         func hasButton(_ w: AXUIElement, _ t: String) -> Bool {
             axFind(w, { isButton($0, t) }) != nil
         }
-        // "What's New" (first launch) → Continue; the theme chooser (shown at launch, or after ⌘N) → Create.
+        // "What's New" (first launch) → Continue; an App Store offer → No Thanks; the theme chooser (shown at launch, or after ⌘N) → Create.
         var sentNew = false
         let t0 = Date()
         while Date().timeIntervalSince(t0) < 12 {
@@ -689,6 +689,7 @@ func keynote() -> Target {
             if win != nil { break }
             let ws = axWindows(pid)
             if let w = ws.first(where: { hasButton($0, "Continue") }) { _ = axPress(w, "Continue") }
+            else if let w = ws.first(where: { hasButton($0, "No Thanks") }) { _ = axPress(w, "No Thanks") }   // App Store offer
             else if let w = ws.first(where: { hasButton($0, "Create") }) { _ = axPress(w, "Create") }
             else if !sentNew { focusLost = false; send(app, 45, .maskCommand); sentNew = true }   // ⌘N
             pause(0.7)
