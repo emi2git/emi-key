@@ -61,6 +61,9 @@ final class InputController: IMKInputController {
         // Terminals: Esc belongs to the program (vim leaves insert mode, readline's Meta prefix) — never a flip.
         // The word stays as shown and Esc goes through. (Terminal.app does not even pass Esc to input methods.)
         if key == .escape, state.isBlind(client.bundleIdentifier()) { key = .other }
+        // Apps that ignore replacement ranges cannot have a committed word replaced: Esc there only flips the word
+        // still being composed (marked text) and otherwise belongs to the app.
+        if key == .escape, !hasMarked, state.isMarkedApp(client.bundleIdentifier()) { key = .other }
         if blind {
             // Terminal.app handles Backspace/Esc itself (they never reach us) while nothing is marked. Its cursor
             // drifts forward on some letters but only goes back when text was deleted: then forget the word.

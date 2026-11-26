@@ -24,7 +24,13 @@ final class AppState {
     /// Ghostty is known up front so the very first word there works too.
     private lazy var untracked: Set<String> = Set(defaults.stringArray(forKey: "UntrackedApps") ?? [])
 
-    func isUntracked(_ id: String?) -> Bool { id.map { untracked.contains($0) && !blind.contains($0) } ?? false }
+    func isUntracked(_ id: String?) -> Bool { id.map { (untracked.contains($0) || marked.contains($0)) && !blind.contains($0) } ?? false }
+
+    /// Apps whose text fields ignore replacement ranges (WeChat 4, Qt: a replacement is inserted after the old text
+    /// instead of over it). Words are composed as marked text there, and a committed word cannot be flipped with Esc.
+    /// `defaults write com.emi2git.inputmethod.EmiKey MarkedApps -array-add <bundle id>` adds more.
+    private lazy var marked: Set<String> = Set(defaults.stringArray(forKey: "MarkedApps") ?? []).union(["com.tencent.xinWeChat"])
+    func isMarkedApp(_ id: String?) -> Bool { id.map { marked.contains($0) } ?? false }
     func markUntracked(_ id: String?) {
         guard let id, !untracked.contains(id), !blind.contains(id) else { return }
         untracked.insert(id)

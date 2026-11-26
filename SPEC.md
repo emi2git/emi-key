@@ -18,6 +18,9 @@ One macOS input method for English, Vietnamese and Mandarin with no switching.
     what it typed; Backspace/Esc go straight to the shell, a backward cursor jump ends the word.
   - Ghostty: ignores replacement ranges → an edit is sent as DEL × n + the new text (like typing it).
   - Apps whose cursor never moves (auto-detected, `UntrackedApps`) → marked text.
+  - WeChat 4 (Qt) inserts a replacement after the old text instead of over it (`tooi` → tooôi): apps in `MarkedApps`
+    (built in: WeChat) always compose with marked text, and Esc there flips only the word still being composed.
+  - Keynote/Numbers/Pages, Xcode and Spotlight need no quirk (direct insertion works).
   - Marked text in terminals (`PtyApps`, Ghostty): Enter/Tab are sent together with the committed word (terminals drop a
     key that ends a composition).
   - After reinstalling Emi Key, Chrome/Electron apps and Ghostty that were already open must be relaunched once
@@ -32,13 +35,18 @@ One macOS input method for English, Vietnamese and Mandarin with no switching.
 - Standard Telex: aa â, aw ă, ee ê, oo ô, ow ơ, uw/w ư, dd đ; s f r x j = sắc huyền hỏi ngã nặng; z removes tone; double tone key undoes it (`ass` → as).
 - Tone placement: new style by default (`hoà`, `thuý`); old style (`hòa`, `thúy`) as a menu option.
 - Tone/mark keys may come anywhere after the vowel (`vieetj`, `vietje`, `tieengs` all work).
-- Transform only when the result is a valid Vietnamese syllable; otherwise keep the raw letters (`class`, `test`, `git` stay).
+- Transform only when the result is a valid Vietnamese syllable; otherwise keep the raw letters (`class`, `git` stay).
+- `uow` gives ươ (người, được); with nothing after the o it is uơ (`thuowr` → thuở, `huow` → huơ), since open ươ does not exist.
+- A common English word (top 5000) with a tone key before a consonant (`test` tét, `rest` rét, `best`, `corn`) stays
+  English in any context — Telex typists put the tone last (`tets` → tét). Esc still flips it.
 - Ambiguous words (valid English AND valid Vietnamese once transformed, e.g. `bus` → bú, `has` → há):
   decided by **context** = language of the last few words before the cursor
   (read via IMK client text; fall back to Emi Key's own record of recent words in this field).
   - Previous words Vietnamese (have diacritics / are Vietnamese-only) → Vietnamese.
   - Previous words English, or start of field → English.
-- Esc right after a word flips it between the raw letters and the transformed version.
+- Esc right after a word flips it between the raw letters and the transformed version — except in terminals
+  (`BlindApps`/`PtyApps`: Terminal, Ghostty), where Esc belongs to the program (vim, readline): the word stays as
+  shown and Esc is passed on. (Terminal.app does not give Esc to input methods at all.)
 
 ## Chinese (pinyin with tone numbers)
 - Chinese is triggered only by a digit 0–5 right after a valid pinyin syllable (`ma3`, `nihao3`, `ni3hao`).
@@ -46,6 +54,8 @@ One macOS input method for English, Vietnamese and Mandarin with no switching.
 - Once a word has a tone digit, the whole word is Chinese until Space / punctuation / Enter.
   Untoned syllables match any tone (`xiao4yang2shangshan` keeps updating).
 - Candidate bar: horizontal, numbered 1–9. Ranking = exact tone match first, then by frequency; closest matches (wrong tone) listed lower so typos still find 你好.
+  A syllable that also splits into a common word (`xian` = xi'an → 西安, `qu4xian` → 去西安) offers that word in the
+  last whole-input slot.
 - A digit right after a tone digit picks that candidate (`ma3` then `1` → 马). Space picks the first candidate. Enter is always passed to the app; raw letters stay. Esc cancels to the raw letters.
 - Digit not after a valid pinyin syllable, or > 5 → typed normally (`mp3`, `iphone15`, `2026`).
 - Simplified by default; Traditional option in the menu.
@@ -64,8 +74,9 @@ One macOS input method for English, Vietnamese and Mandarin with no switching.
 - `Sources/EmiKeyCore/` — pure Swift library, no AppKit: TelexEngine, VietSyllable, PinyinEngine, Dictionary, ContextDetector, Composer (the state machine taking key events → in-progress text / commit / candidates).
 - `Sources/EmiKey/` — IMK app: InputController, CandidateWindow, menu, icon.
 - `Tests/EmiKeyCoreTests/` — unit tests (`swift test`).
-- `Tests/e2e/` — types real keystrokes into TextEdit, Chrome (page + address bar), Safari, Notes, Terminal, Ghostty with
-  Emi Key selected and checks the text (`--app`, `--field`); leaves no windows, notes, files or settings behind.
+- `Tests/e2e/` — types real keystrokes into TextEdit, Chrome (page + address bar), Safari, Notes, Terminal, Ghostty,
+  Pages, Numbers, Keynote, Xcode, Spotlight and WeChat's search field with Emi Key selected and checks the text
+  (`--app`, `--field`); leaves no windows, notes, files, settings or Open Recent entries behind. See CLAUDE.md.
 - `build.sh` — build, sign, install to `~/Library/Input Methods`, restart the input method (skipped when the installed
   build is identical: a restart breaks already-open Chrome/Electron/Ghostty until relaunched).
 - `scripts/uninstall.sh [--purge]` — disable, remove app + settings (+ learned words).
