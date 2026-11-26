@@ -169,7 +169,8 @@ final class InputController: IMKInputController {
 
     /// Up to 200 characters before `start` (the start of the shown word). nil when the app does not expose its text.
     private func precedingText(_ client: IMKTextInput, _ start: Int?) -> String? {
-        guard let start, start >= 0, !state.forceHidden else { return nil }
+        // MarkedApps (WeChat) report text that is not the field's (e.g. its placeholder): use our own word memory.
+        guard let start, start >= 0, !state.forceHidden, !state.isMarkedApp(client.bundleIdentifier()) else { return nil }
         if start == 0 { return "" }
         let from = max(0, start - 200)
         return text(client, NSRange(location: from, length: start - from))
