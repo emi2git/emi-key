@@ -1,14 +1,18 @@
 // End-to-end test: types real key events into an app with Emi Key selected and checks the text.
-//   swift Tests/e2e/e2e.swift [--app textedit|chrome|chrome-user|safari|notes|terminal|ghostty|ghostty-user] [--field textarea|input] [cases-file]
-//   (defaults: --app textedit, Tests/e2e/cases.txt; --field omnibox = Chrome's address bar, never sent Enter)
+//   swift Tests/e2e/e2e.swift [--app APP] [--field textarea|input|omnibox] [--idle-timeout s] [--hid] [cases-file]
+//   APP: textedit (default) | chrome | chrome-user | safari | notes | terminal | ghostty | ghostty-user |
+//        pages | numbers | keynote | xcode | spotlight | wechat | gdocs (always skipped, see below)
+//   (defaults: Tests/e2e/cases.txt; --field omnibox = Chrome's address bar, never sent Enter)
 // Needs: Accessibility (to post key events) and Automation → the target app for the app running this
 // (Terminal / Ghostty / …). Emi Key must be installed (./build.sh).
 // Case file: `input<TAB>expected` per line, `#` comments. ⎋ = Esc, ⌫ = Backspace, ⏎ = Return.
 // `~text` as expected = the result only has to contain `text` (e.g. closest-match candidates).
 //
+// Safety: a case only starts while nobody has used the keyboard or mouse for 3 s; before every key the test window
+// (and for WeChat the search field) must still have focus and no real key/click may have happened — else it stops.
 // Leaves no trail: it only types into windows/documents/notes it created, closes them without saving, deletes
-// its scratch files, restores app settings it changed, the clipboard and the input source. Apps it had to
-// launch are quit again at the end.
+// its scratch files, restores app settings it changed, the clipboard, the input source and Open Recent lists.
+// Apps it had to launch are quit again at the end. Pages/Numbers/Keynote/Xcode must not be running beforehand.
 import AppKit
 import ApplicationServices
 import Carbon
@@ -23,13 +27,11 @@ func option(_ name: String) -> String? {
 }
 let appName = option("--app") ?? "textedit"
 let fieldKind = option("--field") ?? "textarea"
+let idleTimeout = Double(option("--idle-timeout") ?? "600") ?? 600
 /// --hid: post keys through the HID event tap (like a real keyboard) instead of straight to the app's pid.
 /// The focus guard still checks the test window before every key.
 let viaHID = argv.contains("--hid")
 argv.removeAll { $0 == "--hid" }
-/// --reselect: switch to ABC and back to Emi Key once the test window has focus (diagnostics).
-let reselect = argv.contains("--reselect")
-argv.removeAll { $0 == "--reselect" }
 let casesURL = argv.first.map { URL(fileURLWithPath: $0) } ?? scriptDir.appendingPathComponent("cases.txt")
 
 var cleanups: [() -> Void] = []
@@ -190,19 +192,83 @@ struct Target {
     var open: () -> Bool
     var read: () -> String?
     var close: () -> Void
-    var teardown: () -> Void = {}
-    var skip: (String) -> Bool = { _ in false }
     /// Is this (focused) window one the test opened? Typing only starts if so.
     var isOurs: (String) -> Bool
+    /// A panel that takes keys without its app becoming frontmost (Spotlight): the focus guard checks its window only.
+    var background = false
+    /// Enter must never be typed (single-line field where Enter acts, e.g. Spotlight opens the top hit).
+    var noEnter = false
+    /// Checked with the window before every key: the focused element is the test field (WeChat: its search field).
+    var fieldOK: (() -> Bool)? = nil
 }
 
-func launchIfNeeded(_ bundle: String, quitAtEnd: Bool = true) {
+func launchIfNeeded(_ bundle: String, quitAtEnd: Bool = true, args: [String] = []) {
     if running(bundle) != nil { return }
-    run("/usr/bin/open", ["-g", "-b", bundle])
+    run("/usr/bin/open", ["-g", "-b", bundle] + (args.isEmpty ? [] : ["--args"] + args))
     _ = waitFor(15) { running(bundle) != nil }
     pause(2)
-    if quitAtEnd { cleanups.append { running(bundle)?.terminate(); _ = waitFor(10) { running(bundle) == nil } } }
+    if quitAtEnd { cleanups.append { quit(bundle) } }
 }
+func quit(_ bundle: String) {
+    running(bundle)?.terminate()
+    if waitFor(5, { running(bundle) == nil }) { return }
+    if bundle == "com.apple.Keynote" { _ = waitFor(10) { running(bundle) == nil }; return }   // no Automation access: never script it
+    osa("tell application id \"\(bundle)\" to quit", quiet: true)   // some apps (Pages) ignore terminate()
+    _ = waitFor(10) { running(bundle) == nil }
+}
+/// Launch without reopening the windows/documents of the app's last session (this launch only, no setting changed).
+let noRestore = ["-ApplePersistenceIgnoreState", "YES"]
+/// Snapshot an app's whole preferences domain and put it back at the end (after the app was quit: register this
+/// before `launchIfNeeded`, cleanups run last-in first-out). For apps the test launches itself.
+func keepDefaults(_ bundle: String) {
+    let file = tmpDir.appendingPathComponent("\(bundle).defaults.plist")
+    let had = run("/usr/bin/defaults", ["export", bundle, file.path]).status == 0
+    let old = had ? (NSDictionary(contentsOf: file) as? [String: Any]) ?? [:] : [:]
+    cleanups.append {
+        // `defaults import` only adds/overwrites: delete the keys that appeared since, then put the old values back.
+        let now = tmpDir.appendingPathComponent("\(bundle).defaults-now.plist")
+        if run("/usr/bin/defaults", ["export", bundle, now.path]).status == 0, let cur = NSDictionary(contentsOf: now) as? [String: Any] {
+            for k in cur.keys where old[k] == nil { run("/usr/bin/defaults", ["delete", bundle, k]) }
+        }
+        if had, !old.isEmpty { run("/usr/bin/defaults", ["import", bundle, file.path]) }
+    }
+}
+
+/// Open Recent lists (each app's, and the Apple menu's Recent Items) are files owned by sharedfilelistd. Opening a
+/// scratch document adds an entry there: at the end, entries that are new since `scrubRecents` and whose bookmark
+/// mentions one of `markers` are removed again. Register it before the app is launched (it must have quit first).
+let sharedFileLists = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.apple.sharedfilelist")
+func scrubRecents(app listName: String, markers: [String]) {
+    let urls = [sharedFileLists.appendingPathComponent("com.apple.LSSharedFileList.ApplicationRecentDocuments/\(listName).sfl4"),
+                sharedFileLists.appendingPathComponent("com.apple.LSSharedFileList.RecentDocuments.sfl4")]
+    func load(_ u: URL) -> NSDictionary? {
+        guard let d = try? Data(contentsOf: u), let k = try? NSKeyedUnarchiver(forReadingFrom: d) else { return nil }
+        k.requiresSecureCoding = false
+        return k.decodeObject(forKey: NSKeyedArchiveRootObjectKey) as? NSDictionary
+    }
+    func items(_ root: NSDictionary?) -> [NSDictionary] { (root?["items"] as? [NSDictionary]) ?? [] }
+    func id(_ i: NSDictionary) -> String { "\(i["uuid"] ?? "")" }
+    let before = urls.map { Set(items(load($0)).map(id)) }
+    cleanups.append {
+        var changed = false
+        for (u, old) in zip(urls, before) {
+            guard let root = load(u) else { continue }
+            let all = items(root)
+            let keep = all.filter { i in
+                guard !old.contains(id(i)), let b = i["Bookmark"] as? Data else { return true }
+                return !markers.contains { b.range(of: Data($0.utf8)) != nil }
+            }
+            guard keep.count < all.count else { continue }
+            let m = root.mutableCopy() as! NSMutableDictionary
+            m["items"] = keep
+            if let d = try? NSKeyedArchiver.archivedData(withRootObject: m, requiringSecureCoding: false) {
+                try? d.write(to: u, options: .atomic); changed = true
+            }
+        }
+        if changed { run("/usr/bin/killall", ["sharedfilelistd"]) }   // it caches the lists: make it re-read them
+    }
+}
+
 func activate(_ bundle: String) {
     guard let app = running(bundle) else { return }
     if NSWorkspace.shared.frontmostApplication?.bundleIdentifier != bundle {
@@ -215,6 +281,8 @@ func activate(_ bundle: String) {
 let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("emikey-e2e-\(getpid())")
 try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
 cleanups.append { try? FileManager.default.removeItem(at: tmpDir) }
+// Emi Key's own settings too: it learns `UntrackedApps` while being tested (put back as they were).
+keepDefaults(emiID)
 
 // Test page for browsers: one <textarea> and one <input>, no spellcheck/autocorrect.
 let pageURL = tmpDir.appendingPathComponent("emikey-test.html")
@@ -238,6 +306,7 @@ func textEdit() -> Target {
     let icloud = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mobile Documents/com~apple~TextEdit/Documents")
     let before = Set((try? FileManager.default.contentsOfDirectory(atPath: icloud.path)) ?? [])
     return Target(bundle: b, setup: {
+        scrubRecents(app: "com.apple.textedit", markers: ["Untitled"])
         let saved = keys.map { run("/usr/bin/defaults", ["read", b, $0]) }
         for k in keys { run("/usr/bin/defaults", ["write", b, k, "-int", "0"]) }
         cleanups.append {
@@ -353,6 +422,7 @@ func safari() -> Target {
     let b = "com.apple.Safari"
     var tag = ""
     return Target(bundle: b, setup: {
+        scrubRecents(app: "com.apple.safari", markers: [tmpDir.lastPathComponent])   // opened test pages
         launchIfNeeded(b)
     }, open: {
         tag = UUID().uuidString.prefix(8).lowercased()
@@ -486,6 +556,324 @@ func terminal(ghostty: Bool, separate: Bool = false) -> Target {
     }, isOurs: { $0.contains(tag) })
 }
 
+/// The element that has keyboard focus in an app.
+func axFocused(_ pid: pid_t) -> AXUIElement? {
+    axAttr(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute).map { $0 as! AXUIElement }
+}
+func axRole(_ el: AXUIElement?) -> String { el.flatMap { axAttr($0, kAXRoleAttribute) as? String } ?? "" }
+/// First element (depth-first) satisfying `pred`.
+func axFind(_ el: AXUIElement, depth: Int = 0, _ pred: (AXUIElement) -> Bool) -> AXUIElement? {
+    if depth > 30 { return nil }
+    if pred(el) { return el }
+    for c in (axAttr(el, kAXChildrenAttribute) as? [AXUIElement]) ?? [] { if let f = axFind(c, depth: depth + 1, pred) { return f } }
+    return nil
+}
+
+/// Pages / Numbers / Keynote ("… Creator Studio"): a new blank document per case, closed without saving. The app
+/// must not be running (so the test can put its settings back): it is launched without reopening its last session,
+/// with auto-correction off and new documents kept off iCloud, and quit at the end; its settings domain is restored,
+/// and the Open Recent entries of the untitled documents are removed.
+func iwork(_ kind: String) -> Target {
+    let b = "com.apple.\(kind)"
+    var name = ""
+    func app() -> NSRunningApplication? { running(b) }
+    func ourWindow() -> AXUIElement? { app().flatMap { a in axWindows(a.processIdentifier).first { axTitle($0) == name } } }
+    let tell = "tell application id \"\(b)\""
+    return Target(bundle: b, setup: {
+        guard running(b) == nil else { fail("\(kind) is running — quit it first (the test launches its own session and restores its settings)") }
+        keepDefaults(b)
+        scrubRecents(app: "com.apple.\(kind.lowercased())", markers: ["Untitled"])
+        for k in ["NSAutomaticSpellingCorrectionEnabled", "NSAutomaticCapitalizationEnabled", "NSAutomaticPeriodSubstitutionEnabled",
+                  "NSAutomaticQuoteSubstitutionEnabled", "NSAutomaticDashSubstitutionEnabled", "NSAutomaticTextReplacementEnabled",
+                  "NSDocumentSaveNewDocumentsToCloud"] {
+            run("/usr/bin/defaults", ["write", b, k, "-bool", "NO"])
+        }
+        // Autosaved copies of our untitled documents, should any land in iCloud (only files that appeared now).
+        let icloud = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mobile Documents/com~apple~\(kind)/Documents")
+        let before = Set((try? FileManager.default.contentsOfDirectory(atPath: icloud.path)) ?? [])
+        cleanups.append {
+            let now = Set((try? FileManager.default.contentsOfDirectory(atPath: icloud.path)) ?? [])
+            for f in now.subtracting(before) where f.hasPrefix("Untitled") { try? FileManager.default.removeItem(at: icloud.appendingPathComponent(f)) }
+        }
+        launchIfNeeded(b, args: noRestore)   // (its quit runs before the cleanups above)
+    }, open: {
+        guard let n = osa("\(tell)\nset d to make new document\nreturn name of d\nend tell"), let app = app() else { return false }
+        name = n
+        // Its windows may be on another Space: they are listed only once the app is active.
+        app.activate()
+        if !waitFor(1, { NSWorkspace.shared.frontmostApplication == app }) {
+            osa("tell application \"System Events\" to set frontmost of (first process whose unix id is \(app.processIdentifier)) to true", quiet: true)
+        }
+        var w: AXUIElement?
+        guard waitFor(8, { w = ourWindow(); return w != nil }), let w else {
+            print("  (\(kind): no window \(n); windows: \(axWindows(app.processIdentifier).map(axTitle)))"); return false
+        }
+        raise(app, w); pause(0.8)
+        switch kind {
+        case "Numbers":
+            // Select a cell: typing then edits it.
+            osa("\(tell) to tell table 1 of active sheet of document \(asLiteral(n)) to set selection range to range \"B2\"")
+            pause(0.3)
+        case "Keynote":
+            // Edit the first slide's title: Tab selects the first object (the title placeholder), Return edits it.
+            focusGuard = { axFocusedWindow(app.processIdentifier).map { CFEqual($0, w) } == true }
+            key(48, pid: app.processIdentifier); pause(0.3)
+            key(36, pid: app.processIdentifier); pause(0.4)
+            focusGuard = nil
+            let t = osa("\(tell) to get object text of default title item of slide 1 of document \(asLiteral(n))") ?? "?"
+            if !t.isEmpty { print("  (keynote: title not empty after Tab/Return: \(t.count) chars)"); return false }
+        default: break
+        }
+        return true
+    }, read: {
+        switch kind {
+        case "Pages": return osa("\(tell) to get body text of document \(asLiteral(name))")
+        case "Keynote": return osa("\(tell) to get object text of default title item of slide 1 of document \(asLiteral(name))")
+        case "Keynote": return osa("\(tell) to get object text of default title item of slide 1 of document \(asLiteral(name))")
+        case "Numbers":
+            // The cell editor has no readable value: Tab commits the cell (the word stays as shown), then ask for it.
+            guard let a = app() else { return nil }
+            key(48, pid: a.processIdentifier); pause(0.4)
+            return osa("\(tell) to get formatted value of cell \"B2\" of table 1 of active sheet of document \(asLiteral(name))")
+        default: return app().flatMap { axFocusedValue($0.processIdentifier) }
+        }
+    }, close: {
+        osa("\(tell) to close document \(asLiteral(name)) saving no", quiet: true)
+        _ = waitFor(4) { ourWindow() == nil }
+    }, isOurs: { $0 == name }, noEnter: kind == "Numbers")
+}
+
+/// A button labelled `title` (its title, or its description when it has no title).
+func isButton(_ el: AXUIElement, _ title: String) -> Bool {
+    axRole(el) == "AXButton" && ((axAttr(el, kAXTitleAttribute) as? String) == title || (axAttr(el, kAXDescriptionAttribute) as? String) == title)
+}
+/// Press the button labelled `title` inside `el` (a window or sheet).
+func axPress(_ el: AXUIElement, _ title: String) -> Bool {
+    guard let b = axFind(el, { isButton($0, title) }) else { return false }
+    return AXUIElementPerformAction(b, kAXPressAction as CFString) == .success
+}
+
+/// Keynote, driven without AppleScript (macOS Automation access to Keynote may be denied): ⌘N → theme chooser →
+/// Create; Tab selects the title placeholder of the first slide, Return edits it. Read: ⌘A ⌘C (the clipboard is
+/// restored at the end). Close: ⌘W → "Delete". Same launch/settings/recents rules as `iwork`.
+func keynote() -> Target {
+    let b = "com.apple.Keynote"
+    var base = iwork("Keynote")
+    var win: AXUIElement?
+    func app() -> NSRunningApplication? { running(b) }
+    func front(_ app: NSRunningApplication) -> Bool {
+        app.activate()
+        if !waitFor(1, { NSWorkspace.shared.frontmostApplication == app }) {
+            osa("tell application \"System Events\" to set frontmost of (first process whose unix id is \(app.processIdentifier)) to true", quiet: true)
+        }
+        return waitFor(2) { NSWorkspace.shared.frontmostApplication == app }
+    }
+    /// Keys to Keynote while it is frontmost (any of its windows: the theme chooser, a sheet).
+    func send(_ app: NSRunningApplication, _ code: CGKeyCode, _ flags: CGEventFlags = []) {
+        focusGuard = { NSWorkspace.shared.frontmostApplication == app && userIdle() > 1 }
+        key(code, flags, pid: app.processIdentifier)
+        focusGuard = nil
+    }
+    base.open = {
+        guard let app = app(), front(app) else { return false }
+        let pid = app.processIdentifier
+        let before = axWindows(pid)
+        func hasButton(_ w: AXUIElement, _ t: String) -> Bool {
+            axFind(w, { isButton($0, t) }) != nil
+        }
+        // "What's New" (first launch) → Continue; the theme chooser (shown at launch, or after ⌘N) → Create.
+        var sentNew = false
+        let t0 = Date()
+        while Date().timeIntervalSince(t0) < 12 {
+            win = axWindows(pid).first { w in axTitle(w).hasPrefix("Untitled") && !before.contains { CFEqual($0, w) } }
+            if win != nil { break }
+            let ws = axWindows(pid)
+            if let w = ws.first(where: { hasButton($0, "Continue") }) { _ = axPress(w, "Continue") }
+            else if let w = ws.first(where: { hasButton($0, "Create") }) { _ = axPress(w, "Create") }
+            else if !sentNew { focusLost = false; send(app, 45, .maskCommand); sentNew = true }   // ⌘N
+            pause(0.7)
+        }
+        guard let w = win else { print("  (keynote: no new document; windows: \(axWindows(pid).map(axTitle)))"); return false }
+        raise(app, w); pause(0.8)
+        focusLost = false
+        send(app, 48); pause(0.3)   // Tab: select the title placeholder
+        send(app, 36); pause(0.4)   // Return: edit it
+        return !focusLost
+    }
+    base.read = {
+        guard let app = app() else { return nil }
+        NSPasteboard.general.clearContents()
+        key(0, .maskCommand, pid: app.processIdentifier); pause(0.2)   // ⌘A (still under the case's focus guard)
+        key(8, .maskCommand, pid: app.processIdentifier); pause(0.4)   // ⌘C
+        return NSPasteboard.general.string(forType: .string)
+    }
+    base.close = {
+        guard let app = app(), let w = win, axWindows(app.processIdentifier).contains(where: { CFEqual($0, w) }) else { return }
+        if front(app) {
+            focusLost = false
+            send(app, 13, .maskCommand)   // ⌘W
+            _ = waitFor(3) { axPress(w, "Delete") }
+        }
+        _ = waitFor(4) { !axWindows(app.processIdentifier).contains { CFEqual($0, w) } }
+        if axWindows(app.processIdentifier).contains(where: { CFEqual($0, w) }) { print("  (keynote: test document still open!)") }
+        win = nil
+    }
+    base.isOurs = { $0.hasPrefix("Untitled") }
+    return base
+}
+
+/// Xcode: a scratch .swift file in the test's temp folder (no project), typed into on a `// ` comment line (no code
+/// completion there), closed and deleted after each case. Xcode must not be running: it is launched without
+/// reopening its last session and quit at the end; its settings and the Open Recent entries are put back.
+func xcode() -> Target {
+    let b = "com.apple.dt.Xcode"
+    var file = URL(fileURLWithPath: "/dev/null"), tag = ""
+    func prefix() -> String { "// \(tag)\n// " }
+    func app() -> NSRunningApplication? { running(b) }
+    func ourWindow() -> AXUIElement? { app().flatMap { axWindow($0.processIdentifier, titleContains: file.lastPathComponent) } }
+    return Target(bundle: b, setup: {
+        guard running(b) == nil else { fail("Xcode is running — quit it first (the test launches its own session and restores its settings)") }
+        keepDefaults(b)
+        scrubRecents(app: "com.apple.dt.xcode", markers: [tmpDir.lastPathComponent])
+        launchIfNeeded(b, args: noRestore)
+    }, open: {
+        tag = String(Int.random(in: 10_000_000...99_999_999))
+        file = tmpDir.appendingPathComponent("emikey\(tag).swift")
+        try? (prefix() + "\n").write(to: file, atomically: true, encoding: .utf8)   // Xcode keeps a final newline
+        run("/usr/bin/open", ["-g", "-a", "Xcode", file.path])
+        // Its windows may be on another Space: they are listed only once the app is active.
+        if let a = app() {
+            a.activate()
+            if !waitFor(1, { NSWorkspace.shared.frontmostApplication == a }) {
+                osa("tell application \"System Events\" to set frontmost of (first process whose unix id is \(a.processIdentifier)) to true", quiet: true)
+            }
+        }
+        var w: AXUIElement?
+        guard waitFor(20, { w = ourWindow(); return w != nil }), let w, let app = app() else {
+            print("  (xcode: no window for \(file.lastPathComponent))"); return false
+        }
+        raise(app, w); pause(0.8)
+        focusGuard = { axFocusedWindow(app.processIdentifier).map { CFEqual($0, w) } == true }
+        key(125, .maskCommand, pid: app.processIdentifier)   // ⌘↓ ←: end of the second line, after "// "
+        key(123, pid: app.processIdentifier)
+        focusGuard = nil
+        pause(0.3)
+        let ok = waitFor(3) { axFocusedValue(app.processIdentifier) == prefix() + "\n" }
+        if !ok { print("  (xcode: focused=\(axTitle(axFocusedWindow(app.processIdentifier))) role=\(axRole(axFocused(app.processIdentifier))) value=\(axFocusedValue(app.processIdentifier).map { $0.debugDescription } ?? "nil") want=\(prefix().debugDescription))") }
+        return ok
+    }, read: {
+        guard let v = app().flatMap({ axFocusedValue($0.processIdentifier) }) else { return nil }
+        guard v.hasPrefix(prefix()), v.hasSuffix("\n") else { return "<unexpected file content>" }
+        return String(v.dropFirst(prefix().count).dropLast())
+    }, close: {
+        // Typed text makes the file "edited": revert it first so closing never asks to save.
+        // Close the document unsaved before deleting its file (else Xcode asks "Close / Re-save").
+        osa("tell application id \"\(b)\" to close (every document whose name is \(asLiteral(file.lastPathComponent))) saving no", quiet: true)
+        if !waitFor(4, { ourWindow() == nil }), let w = ourWindow() {
+            axPressClose(w)
+            _ = waitFor(2) { axWindows(app()?.processIdentifier ?? 0).contains { axPress($0, "Don’t Save") || axPress($0, "Don't Save") || axPress($0, "Revert") } }
+            _ = waitFor(4) { ourWindow() == nil }
+        }
+        if ourWindow() == nil { try? FileManager.default.removeItem(at: file) }
+        else { print("  (xcode: could not close \(file.lastPathComponent); kept until the end)") }
+    }, isOurs: { $0.contains(file.lastPathComponent) })
+}
+
+/// Spotlight: ⌘Space (the one key sent through the system, only while the keyboard is idle), type into its search
+/// field (keys go to Spotlight's process), read the field, clear it and Esc. Its panel never makes Spotlight frontmost.
+func spotlight() -> Target {
+    let b = "com.apple.Spotlight"
+    func app() -> NSRunningApplication? { NSRunningApplication.runningApplications(withBundleIdentifier: b).first }
+    func field() -> AXUIElement? {
+        guard let a = app(), let f = axFocused(a.processIdentifier), axRole(f) == "AXTextField" else { return nil }
+        return f
+    }
+    return Target(bundle: b, app: app, open: {
+        guard let app = app() else { return false }
+        if field() == nil {
+            let src = CGEventSource(stateID: .hidSystemState)
+            for down in [true, false] {   // ⌘Space through the system (Spotlight's own shortcut)
+                guard let e = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: down) else { continue }
+                e.flags = .maskCommand; e.post(tap: .cghidEventTap); pause(0.012)
+            }
+        }
+        guard waitFor(4, { field() != nil }) else { print("  (spotlight: no search field)"); return false }
+        if axFocusedValue(app.processIdentifier) != "" {   // a remembered query: select all, delete
+            key(0, .maskCommand, pid: app.processIdentifier); key(51, pid: app.processIdentifier)
+        }
+        pause(0.3)
+        return axFocusedValue(app.processIdentifier) == ""
+    }, read: {
+        app().flatMap { axFocusedValue($0.processIdentifier) }
+    }, close: {
+        guard let app = app(), field() != nil else { return }
+        key(0, .maskCommand, pid: app.processIdentifier); key(51, pid: app.processIdentifier); pause(0.2)   // leave no query
+        key(53, pid: app.processIdentifier)
+        if !waitFor(2, { field() == nil }) { key(53, pid: app.processIdentifier); _ = waitFor(2) { field() == nil } }
+    }, isOurs: { _ in true }, background: true, noEnter: true, fieldOK: { field() != nil })
+}
+
+/// WeChat (the user's running app, with real chats): ONLY its main window's search field. Never launched or quit,
+/// never Enter, never a chat. The focused element must be that search field before every key; at the end of each
+/// case the field is cleared and Esc leaves the search.
+func wechat() -> Target {
+    let b = "com.tencent.xinWeChat"
+    var search: AXUIElement?
+    func app() -> NSRunningApplication? { running(b) }
+    /// WeChat 4 (Qt): the search box is an AXTextArea titled "Search" (搜索); a chat's box is `chat_input_field`.
+    func isSearch(_ el: AXUIElement) -> Bool {
+        guard ["AXTextField", "AXTextArea", "AXSearchField"].contains(axRole(el)),
+              (axAttr(el, kAXIdentifierAttribute) as? String)?.contains("chat") != true else { return false }
+        let title = ((axAttr(el, kAXTitleAttribute) as? String) ?? (axAttr(el, kAXPlaceholderValueAttribute) as? String) ?? "").lowercased()
+        return title == "search" || title == "搜索"
+    }
+    /// Keyboard focus is in the search field (never anything else, e.g. a chat's message box).
+    func inSearch() -> Bool {
+        guard let a = app(), let s = search, let f = axFocused(a.processIdentifier) else { return false }
+        return CFEqual(f, s)
+    }
+    return Target(bundle: b, app: app, setup: {
+        guard let a = running(b) else { fail("WeChat is not running (the test never launches it)") }
+        // Main window closed (WeChat keeps running in the menu bar): `open` shows it; it is closed again at the end.
+        if axWindows(a.processIdentifier).isEmpty {
+            run("/usr/bin/open", ["-b", b])
+            _ = waitFor(5) { !axWindows(a.processIdentifier).isEmpty }
+            cleanups.append {
+                for w in axWindows(a.processIdentifier) { axPressClose(w) }
+            }
+        }
+    }, open: {
+        guard let app = app() else { return false }
+        app.activate()
+        if !waitFor(1, { NSWorkspace.shared.frontmostApplication == app }) {
+            osa("tell application \"System Events\" to set frontmost of (first process whose unix id is \(app.processIdentifier)) to true", quiet: true)
+            _ = waitFor(2) { NSWorkspace.shared.frontmostApplication == app }
+        }
+        guard let w = axFocusedWindow(app.processIdentifier) ?? axWindows(app.processIdentifier).first else { print("  (wechat: no window)"); return false }
+        guard let s = axFind(w, isSearch) else { print("  (wechat: no search field in its window)"); return false }
+        search = s
+        AXUIElementSetAttributeValue(s, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        guard waitFor(2, inSearch) else { print("  (wechat: search field did not take focus: \(axRole(axFocused(app.processIdentifier))))"); return false }
+        if let v = axAttr(s, kAXValueAttribute) as? String, !v.isEmpty {   // a search left over: clear it
+            focusGuard = inSearch
+            key(0, .maskCommand, pid: app.processIdentifier); key(51, pid: app.processIdentifier)
+            focusGuard = nil
+        }
+        pause(0.3)
+        return (search.flatMap { axAttr($0, kAXValueAttribute) as? String } ?? "") == ""
+    }, read: {
+        search.flatMap { axAttr($0, kAXValueAttribute) as? String }
+    }, close: {
+        guard let app = app() else { return }
+        focusGuard = inSearch
+        focusLost = false
+        key(0, .maskCommand, pid: app.processIdentifier); key(51, pid: app.processIdentifier); pause(0.2)
+        key(53, pid: app.processIdentifier)
+        focusGuard = nil
+        if let v = search.flatMap({ axAttr($0, kAXValueAttribute) as? String }), !v.isEmpty { print("  (wechat: search field not cleared!)") }
+    }, isOurs: { _ in true }, noEnter: true, fieldOK: inSearch)
+}
+
 let target: Target
 switch appName {
 case "textedit": target = textEdit()
@@ -496,7 +884,19 @@ case "notes": target = notes()
 case "terminal": target = terminal(ghostty: false)
 case "ghostty": target = terminal(ghostty: true, separate: true)
 case "ghostty-user": target = terminal(ghostty: true)
-default: fail("unknown --app \(appName) (textedit, chrome, chrome-user, safari, notes, terminal, ghostty, ghostty-user)")
+case "pages": target = iwork("Pages")
+case "numbers": target = iwork("Numbers")
+case "keynote": target = keynote()
+case "xcode": target = xcode()
+case "spotlight": target = spotlight()
+case "wechat": target = wechat()
+case "gdocs":
+    // /Applications/Google Docs.app is a 216-byte script that opens docs.google.com in the default browser (the
+    // user's signed-in Chrome). Every editable Google Doc is a file in the user's Drive, so it is not tested;
+    // a page in Chrome is covered by --app chrome.
+    print("gdocs: skipped — Google Docs.app only opens docs.google.com in the browser, and any editable doc is a file in the user's Drive")
+    exit(0)
+default: fail("unknown --app \(appName) (textedit, chrome, chrome-user, safari, notes, terminal, ghostty, ghostty-user, pages, numbers, keynote, xcode, spotlight, wechat, gdocs)")
 }
 
 // MARK: main
@@ -513,14 +913,29 @@ var cases: [(String, String)] = caseText.split(separator: "\n", omittingEmptySub
 }
 // A single-line field has no newlines: Enter cases only make sense in multi-line fields.
 // Never Enter in the address bar (it would navigate / search).
-if fieldKind == "input" || fieldKind == "omnibox" { cases = cases.filter { !$0.0.contains("⏎") } }
-// In a terminal Esc belongs to the program (it reaches `cat` as ^[), so the Esc flip is not tested there.
-if appName == "terminal" || appName.hasPrefix("ghostty") { cases = cases.filter { !$0.0.contains("⎋") } }
+if fieldKind == "input" || fieldKind == "omnibox" || target.noEnter { cases = cases.filter { !$0.0.contains("⏎") } }
+// In a terminal Esc belongs to the program, never a flip: the word stays as shown and `cat` receives ^[.
+if appName == "terminal" || appName.hasPrefix("ghostty") {
+    cases = cases.filter { !$0.0.contains("⎋") } + [("the bus ⎋", "the bus \u{1b}"), ("vieetj⎋", "việt\u{1b}")]
+}
+// WeChat: Esc that is not a flip leaves the search field (focus may move towards a chat), and a committed word is
+// not flipped there (MarkedApps): no Esc cases.
+if appName == "wechat" { cases = cases.filter { !$0.0.contains("⎋") } }
 
 let previous = currentSource()
 cleanups.append { _ = select(previous) }
-let pasteboard = NSPasteboard.general.string(forType: .string)
-cleanups.append { if let p = pasteboard, NSPasteboard.general.string(forType: .string) != p { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(p, forType: .string) } }
+// The whole clipboard (every item, every type), put back at the end (Keynote is read through ⌘C).
+let pasteboard: [[NSPasteboard.PasteboardType: Data]] = (NSPasteboard.general.pasteboardItems ?? []).map { item in
+    Dictionary(uniqueKeysWithValues: item.types.compactMap { t in item.data(forType: t).map { (t, $0) } })
+}
+let pasteboardCount = NSPasteboard.general.changeCount
+cleanups.append {
+    guard NSPasteboard.general.changeCount != pasteboardCount else { return }
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.writeObjects(pasteboard.map { d in
+        let item = NSPasteboardItem(); for (t, v) in d { item.setData(v, forType: t) }; return item
+    })
+}
 let frontBefore = NSWorkspace.shared.frontmostApplication
 cleanups.insert({ frontBefore?.activate() }, at: 0)
 
@@ -530,31 +945,39 @@ guard select(emi) else { fail("could not select Emi Key (TISSelectInputSource)")
 
 let started = Date()
 var rows: [(String, String, String, Bool)] = []
-/// Seconds since the user last touched a real key (our postToPid events do not count).
-func userIdle() -> Double { CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: .keyDown) }
+/// Seconds since the user last pressed a real key or mouse button (our postToPid events do not count).
+func userIdle() -> Double {
+    [CGEventType.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+        .map { CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: $0) }.min() ?? 0
+}
+/// Seconds since the mouse last moved (someone using the computer, even without clicking).
+func mouseIdle() -> Double { CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: .mouseMoved) }
+/// Every case takes the keyboard focus for a few seconds: only start one while nobody is using the computer.
+/// Gives up (cleanly) after `--idle-timeout` seconds.
 func waitForIdle() {
     var waited = 0.0
-    while userIdle() < 2, waited < 60 { if waited == 0 { print("  (waiting for the keyboard to be idle…)") }; pause(0.5); waited += 0.5 }
+    while userIdle() < 3 || mouseIdle() < 3 {
+        if waited == 0 { print("  (waiting until nobody is using the keyboard or mouse…)") }
+        if waited > idleTimeout { fail("the computer stayed in use for \(Int(idleTimeout)) s — stopped (rerun later)") }
+        pause(0.5); waited += 0.5
+    }
 }
 
 func runCase(_ input: String) -> (got: String, disturbed: Bool) {
     waitForIdle()
-    let t0 = Date()
     focusGuard = nil; focusLost = false
     guard target.open() else { target.close(); return ("<open failed>", false) }
     guard let app = target.app?() ?? running(target.bundle) else { fail("\(appName) not running") }
     let win = axFocusedWindow(app.processIdentifier)
-    guard let win, NSWorkspace.shared.frontmostApplication == app, target.isOurs(axTitle(win)) else {
+    guard let win, target.background || NSWorkspace.shared.frontmostApplication == app, target.isOurs(axTitle(win)) else {
         print("  (focused window is not the test window: \"\(axTitle(win))\" — case skipped)")
         target.close(); return ("<not our window>", false)
     }
     let typingStart = Date()
     focusGuard = {
-        NSWorkspace.shared.frontmostApplication == app && axFocusedWindow(app.processIdentifier).map { CFEqual($0, win) } == true
+        (target.background || NSWorkspace.shared.frontmostApplication == app) && axFocusedWindow(app.processIdentifier).map { CFEqual($0, win) } == true
+            && target.fieldOK?() != false
             && (viaHID || userIdle() >= Date().timeIntervalSince(typingStart))   // a real key press: the user is typing, stop
-    }
-    if reselect, let abc = TISCreateInputSourceList([kTISPropertyInputSourceID as String: (ProcessInfo.processInfo.environment["RESELECT_VIA"] ?? "com.apple.keylayout.ABC")] as CFDictionary, false)?.takeRetainedValue() as? [TISInputSource], let a = abc.first {
-        _ = select(a); pause(0.3); _ = select(emi); pause(0.3)
     }
     if sourceID(currentSource()) != emiID { _ = select(emi) }
     type(input, pid: app.processIdentifier)
@@ -563,12 +986,14 @@ func runCase(_ input: String) -> (got: String, disturbed: Bool) {
     focusGuard = nil
     target.close()
     frontBefore?.activate()   // give the keyboard back between cases: the user's keys never land in a test window
-    return (got, userIdle() < Date().timeIntervalSince(t0))   // a real key press landed during the case
+    return (got, userIdle() < Date().timeIntervalSince(typingStart))   // a real key press landed while typing (not ⌘Space of open)
 }
 
-for (input, expected) in cases where !target.skip(input) {
+for (input, expected) in cases {
     var r = runCase(input)
-    for _ in 0..<3 where r.disturbed { print("  (user typed during \"\(input)\", retrying)"); r = runCase(input) }
+    for _ in 0..<3 where r.disturbed || ["<focus lost>", "<open failed>", "<read failed>", "<not our window>"].contains(r.got) {
+        print("  (\(r.disturbed ? "user typed" : r.got) during \"\(input)\", retrying)"); r = runCase(input)
+    }
     // Notes capitalises sentence starts itself (it is the user's app; its settings are left alone): ignore case there.
     let (g, e) = appName == "notes" ? (r.got.lowercased(), expected.lowercased()) : (r.got, expected)
     let ok = e.hasPrefix("~") ? g.contains(e.dropFirst()) : g == e

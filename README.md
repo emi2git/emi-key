@@ -11,14 +11,18 @@ just type. Version 1.0.0. Details: [SPEC.md](SPEC.md).
 | `tooi ddi hocj` | tôi đi học | Telex: `aa` â, `aw` ă, `ee` ê, `oo` ô, `ow` ơ, `uw`/`w` ư, `dd` đ |
 | `vieetj`, `vietje` | việt | tones `s f r x j` (sắc huyền hỏi ngã nặng) anywhere after the vowel, `z` removes |
 | `ass`, `class`, `git` | as, class, git | double key undoes; not a Vietnamese syllable → left alone |
+| `test`, `rest`, `best` | test, rest, best | common English words with the tone key before a consonant stay English (`tets` → tét) |
+| `thuowr` | thuở | `uow` is ươ, or uơ when nothing follows |
 | `I take the bus` / `cho con bus` | bus / bú | English-or-Vietnamese words follow the words before them |
 | `ma3` | candidate bar `1 马 2 码 …` | a tone digit 1–4 (5/0 = neutral) after pinyin starts Chinese |
 | `ma3` `2` | 码 | a digit right after the tone digit picks; Space picks the first |
 | `ni3hao`, `xiao4yang2shangshan` | 你好, 小羊上山 | untoned syllables match any tone |
+| `xian1`, `qu4xian` | … 西安, 去西安 | a syllable that also splits into a common word (xi'an) offers that word too |
 | `mp3`, `iphone15`, `2026` | mp3, iphone15, 2026 | digits after non-pinyin stay digits |
 
 - **Esc** right after a word flips it between raw letters and Vietnamese (`the bus ⎋` → the bú). While composing
-  Chinese, Esc keeps the raw pinyin.
+  Chinese, Esc keeps the raw pinyin. In terminals (Terminal, Ghostty) Esc always goes to the program (vim,
+  the shell) and never flips.
 - **Enter**, Tab, arrows and ⌘/⌃/⌥ shortcuts keep the word exactly as shown and always reach the app on the first press.
 - Clicking or moving the cursor mid-word just leaves the word as it is.
 - Text is inserted directly (no underline), except in apps that hide their text from input methods.
@@ -64,9 +68,10 @@ to the system log — for debugging only, off by default; `defaults delete com.e
 
 ```sh
 swift test                                                    # unit tests (+ per-key latency benchmark)
-swift Tests/e2e/e2e.swift --app textedit Tests/e2e/cases-full.txt   # real keystrokes; --app chrome|safari|notes|terminal|ghostty
+swift Tests/e2e/e2e.swift --app textedit Tests/e2e/cases-full.txt   # real keystrokes; see CLAUDE.md for all --app values
 ```
 
-The e2e harness only types into windows it creates, stops when you type or focus leaves, and cleans up after itself.
+The e2e harness only types into windows it creates, waits until nobody uses the keyboard or mouse, stops when you
+type or focus leaves, and cleans up after itself (documents, settings, Open Recent entries). Maintainer notes: [CLAUDE.md](CLAUDE.md).
 It needs Accessibility + Automation permission for the terminal running it. `defaults write … ForceHidden -bool YES`
 forces the underlined (marked-text) path for testing. Icons: `swift scripts/make-icons.swift`.
